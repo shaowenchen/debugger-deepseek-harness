@@ -16,11 +16,11 @@ set -euo pipefail
 
 : "${DSH_VERSION:=0.1.2-rc.1}"
 : "${DSH_PORT:=13080}"
-# Empty means "give me a scratch directory": the session starts in an empty
-# workspace of its own rather than in the repository checkout, so it begins with
-# a clean slate. Name → resolved under the session home; absolute path → used
-# as given.
-: "${DSH_WORKSPACE_DIR:=workspace}"
+# The directory the session works in: the runner's own working directory, so the
+# session starts where the workflow put it (the repository checkout, since the
+# workflow runs `actions/checkout` before this action). An absolute path is used
+# as given; any other value is a name resolved under the session home.
+: "${DSH_WORKSPACE_DIR:=$PWD}"
 : "${DSH_HOME_DIR:=$PWD/.dsh-session-home}"
 : "${DSH_SESSION_HOURS:=6}"
 # No session-length input: the job's own timeout-minutes is the deadline.
@@ -154,17 +154,24 @@ fi
 
 # ── 4. model settings ───────────────────────────────────────────────────────
 
-# A custom gateway is expressed the way dsh reads it: a provider block in
-# $DSH_HOME/settings.yaml, whose apiKeyEnv names the environment variable the
-# key travels in. The official route needs no settings at all — dsh reads
-# DEEPSEEK_API_KEY itself.
+# Write the model selection into settings.yaml, the file dsh reads at startup.
+# dsh has no model flag, so this file is the only way the caller's choice
+# reaches the session — see scripts/settings.mjs for the two routes it writes.
+#
+# It runs on BOTH routes, not only the custom one. On the official route it
+# records just the default-model selection, and only when the caller named a
+# model: with none, staying silent leaves dsh its own default rather than
+# pinning a model id this action would then have to track.
+mkdir -p "$DSH_HOME"
+DSH_API_KEY="$DSH_API_KEY" DSH_BASE_URL="$DSH_BASE_URL" DSH_MODEL="$DSH_MODEL" \
+DSH_HOME="$DSH_HOME" node "$GITHUB_ACTION_PATH/scripts/settings.mjs" \
+  || die "could not write the model configuration to $DSH_HOME/settings.yaml"
+
+# The credential travels in the environment variable each route's provider
+# declares: the custom block names API_KEY through apiKeyEnv, while
+# llm-deepseek resolves DEEPSEEK_API_KEY by default.
 if [ -n "$DSH_BASE_URL" ]; then
-  mkdir -p "$DSH_HOME"
-  DSH_API_KEY="$DSH_API_KEY" DSH_BASE_URL="$DSH_BASE_URL" DSH_MODEL="$DSH_MODEL" \
-  DSH_HOME="$DSH_HOME" node "$GITHUB_ACTION_PATH/scripts/settings.mjs" \
-    || die "could not write $DSH_HOME/settings.yaml"
   export API_KEY="$DSH_API_KEY"
-  log "wrote the custom provider into settings.yaml"
 else
   export DEEPSEEK_API_KEY="$DSH_API_KEY"
 fi

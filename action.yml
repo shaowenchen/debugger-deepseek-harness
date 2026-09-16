@@ -30,11 +30,13 @@ inputs:
     required: false
     default: ''
   model:
-    description: 'Model id(s), comma-separated.'
+    description: >-
+      Model id(s), comma-separated; the first is the default. 'default' uses
+      the endpoint's own default model.
     required: false
     default: 'default'
   workspace_dir:
-    description: 'Directory the session works in.'
+    description: 'Directory the session works in; defaults to the runner directory.'
     required: false
     default: ''
   extra_args:

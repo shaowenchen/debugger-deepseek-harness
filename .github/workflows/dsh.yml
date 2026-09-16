@@ -24,7 +24,10 @@ on:
       model:
         description: 'Model'
         type: string
-        default: ''
+        # The sentinel for "no explicit choice". It is the field's default so
+        # the form is never blank, and it falls through to the MODEL secret
+        # below rather than overriding it.
+        default: 'default'
 
 permissions:
   contents: read
@@ -52,7 +55,13 @@ jobs:
           password: ${{ secrets.PASSWORD }}
           version: ${{ inputs.version }}
           base_url: ${{ secrets.BASE_URL }}
-          model: ${{ inputs.model || secrets.MODEL }}
+          # 'default' — the field's own default — means "no explicit choice",
+          # so it falls through to the MODEL secret. Without this the field
+          # could never be blank and the secret would never be consulted. If
+          # the secret is unset too the empty value reaches the action, which
+          # reads it the same way and leaves dsh its own default model.
+          model: ${{ inputs.model == 'default' && secrets.MODEL || inputs.model }}
           ngrok_token: ${{ secrets.NGROK_TOKEN }}
-          # workspace_dir is left to the action's default (an empty workspace/),
-          # so it needs no form field.
+          # workspace_dir is left to the action's default — the runner's own
+          # working directory, i.e. the repository checkout — so it needs no
+          # form field.

@@ -53,8 +53,10 @@ discarded with the job.
 
 ## Model routing
 
-Three values decide which model answers, and they map one-to-one onto what
-`dsh` itself takes:
+Two values decide which model answers. Both are written into
+`$DSH_HOME/settings.yaml`, the file `dsh` reads at startup — `dsh` has no
+command-line flag for a model, so this file is the only place the choice can
+live:
 
 | | Where it comes from | Notes |
 |---|---|---|
@@ -62,10 +64,14 @@ Three values decide which model answers, and they map one-to-one onto what
 | **Model** | `MODEL` secret, overridable by the `model` field for one run | Comma-separated for several; the first is the default |
 | **API key** | the `API_KEY` secret, and nothing else | Never an input — workflow inputs are plain text in the run |
 
-To point at your own gateway, set the `BASE_URL` and `MODEL` secrets once. Leave
-both unset to use the official DeepSeek endpoint, where `API_KEY` is your
-DeepSeek key. Setting only one is an error the action reports before it starts
-anything, rather than letting `dsh` fail later on a half-configured route.
+Leave `BASE_URL` unset to use the official DeepSeek endpoint, where `API_KEY` is
+your DeepSeek key and `MODEL` selects among the endpoint's own models. Set it to
+point at any OpenAI-compatible gateway; `MODEL` is then required, because a
+gateway you declare by hand has no built-in catalog to fall back on.
+
+`MODEL` (or the `model` field) may also be left as `default`, the value the
+action reads as *no explicit choice*: the official route then keeps `dsh`'s own
+default model instead of pinning one the action would have to track.
 
 ```yaml
 # one run against a different model, no secret edits:
@@ -105,9 +111,9 @@ To give the session the repository instead, check it out and point at it:
           # …the other inputs as above
 ```
 
-The session starts in an empty `workspace/` directory of its own, so it begins
-with a clean slate — nothing from this repository is in the way. Point
-`workspace_dir` at an absolute path to work somewhere else, as above.
+The session starts in the runner's own working directory — whatever the
+workflow's earlier steps left there, which is the checkout if you added one.
+Point `workspace_dir` at another path to work somewhere else, as above.
 
 ## Why there is a password gateway
 
@@ -178,9 +184,9 @@ Two consequences worth knowing:
 | `version` | `0.1.2-rc.1` | dsh version to install; `latest` or the pinned release |
 | `password` | generated | Password guarding the link |
 | `ngrok_token` | — | ngrok authtoken (**required** for a public link) |
-| `base_url` | — | Model API endpoint; set together with `model` |
-| `model` | — | Model id(s), comma-separated; the first is the default |
-| `workspace_dir` | `workspace` | Directory to work in; a name resolves under the session home |
+| `base_url` | — | Model API endpoint; empty = official DeepSeek |
+| `model` | `default` | Model id(s), comma-separated; the first is the default. `default` keeps the endpoint's own default model |
+| `workspace_dir` | the runner directory | Directory to work in; a name resolves under the session home |
 | `extra_args` | — | Extra flags for the `dsh` command |
 | `log_level` | — | `debug` prints more detail |
 
@@ -191,7 +197,7 @@ Two consequences worth knowing:
 | `action.yml` | The composite action |
 | `scripts/action.sh` | Orchestration: install dsh, run it, gateway, tunnel, session lifetime |
 | `scripts/gateway.mjs` | Password gate and reverse proxy (zero dependencies) |
-| `scripts/settings.mjs` | Writes the custom-gateway block into `$DSH_HOME/settings.yaml` |
+| `scripts/settings.mjs` | Writes the model configuration (both routes) into `$DSH_HOME/settings.yaml` |
 | `scripts/session-summary.sh` | Publishes the link and password to the job summary |
 | `.github/workflows/dsh.yml` | The `workflow_dispatch` entry point for this repo |
 | `.github/workflows/ci.yml` | Lint + the gateway end-to-end suite, on every offered dsh version |
@@ -214,9 +220,10 @@ Two consequences worth knowing:
 - **One session at a time per repository** — both sessions would claim the same
   gateway port, so the workflow keys its `concurrency` group to the repository
   and a second run queues.
-- **The session starts empty.** It gets a scratch `workspace/` on the runner,
-  not a copy of this repository. Point `workspace_dir` at an absolute path if
-  you want it to work on code that is already on the runner.
+- **The session starts where the runner put it.** The workspace is the runner's
+  own working directory — the repository checkout if the workflow ran
+  `actions/checkout` first, and empty otherwise. Point `workspace_dir` at
+  another path to work somewhere else.
 - **Nothing survives the run.** The runner is discarded with the job, and there
   is no S3 sync outside the image.
 

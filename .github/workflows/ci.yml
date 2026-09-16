@@ -191,6 +191,10 @@ jobs:
         # A settings.yaml dsh rejects stops the session from ever starting, and
         # a second declaration of the same top-level key is the failure mode a
         # re-run produces — so check both, and that dsh boots with the result.
+        #
+        # Both routes are covered: the custom one writes a provider block, and
+        # the official one writes only the model selection (previously it wrote
+        # nothing, so the `model` input was silently ignored there).
         run: |
           set -eux
           rm -rf /tmp/settings-home && mkdir -p /tmp/settings-home
@@ -205,6 +209,38 @@ jobs:
             node scripts/settings.mjs
           test "$(grep -c '^llm-pi-ai:' /tmp/settings-home/settings.yaml)" = 1
           test "$(grep -c '^agent-default-model:' /tmp/settings-home/settings.yaml)" = 1
+
+          # The sentinel means "no explicit choice": with the official route it
+          # must write nothing at all, leaving dsh its own default model.
+          rm -rf /tmp/settings-official && mkdir -p /tmp/settings-official
+          DSH_HOME=/tmp/settings-official DSH_BASE_URL='' DSH_MODEL='default' \
+            node scripts/settings.mjs
+          test ! -e /tmp/settings-official/settings.yaml
+
+          # An explicit model on the official route writes only the selection —
+          # no provider block, since llm-deepseek already owns that route.
+          rm -rf /tmp/settings-official2 && mkdir -p /tmp/settings-official2
+          DSH_HOME=/tmp/settings-official2 DSH_BASE_URL='' DSH_MODEL='deepseek-v4-pro' \
+            node scripts/settings.mjs
+          test "$(grep -c '^agent-default-model:' /tmp/settings-official2/settings.yaml)" = 1
+          test "$(grep -c '^llm-pi-ai:' /tmp/settings-official2/settings.yaml)" = 0
+          grep -q "model: 'deepseek-v4-pro'" /tmp/settings-official2/settings.yaml
+
+          # A custom route with no usable model id cannot serve a request: a
+          # hand-declared gateway has no built-in catalog to fall back on, so
+          # this must fail loudly instead of writing an unusable session.
+          if DSH_HOME=/tmp/settings-home DSH_BASE_URL=https://gateway.example/v1 \
+               DSH_MODEL='default' node scripts/settings.mjs 2>/dev/null; then
+            echo 'a custom route with the sentinel model should have been refused' >&2
+            exit 1
+          fi
+
+          # Switching routes must not leave the other route's declaration
+          # behind: two `llm-pi-ai` keys would make dsh reject the document.
+          DSH_HOME=/tmp/settings-home DSH_BASE_URL='' DSH_MODEL='deepseek-v4-pro' \
+            node scripts/settings.mjs
+          test "$(grep -c '^llm-pi-ai:' /tmp/settings-home/settings.yaml)" = 0
+
           DSH_HOME=/tmp/settings-home DEEPSEEK_API_KEY=sk-test \
             timeout 90 dsh --profile web --no-open --port 3098 > /tmp/settings-home/boot.log 2>&1 &
           for _ in $(seq 1 45); do

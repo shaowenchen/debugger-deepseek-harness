@@ -1,35 +1,54 @@
 #!/usr/bin/env node
 /**
- * Write the managed custom-provider block into $DSH_HOME/settings.yaml.
+ * Write the model configuration into $DSH_HOME/settings.yaml — the file dsh
+ * reads at startup.
  *
- * This is the native-start replacement for the image's sync-provider.sh: with
- * no container, nothing else expresses "use this gateway and model" to dsh.
- * The shape below is what dsh's own `llm-pi-ai` provider reads — a provider
- * whose `apiKeyEnv` names the environment variable the key travels in, and an
- * `agent-default-model` naming the provider and model to start on.
+ * dsh has no model flag on its command line: the selection lives in the
+ * `agent-default-model` settings section, whose built-in default (set by the
+ * base bundle's cordis.patch.yml) is
+ * `{provider: deepseek-official, model: deepseek-flash}`. Writing that section
+ * here is what makes the caller's choice take effect at boot.
  *
- * Reads DSH_HOME, DSH_BASE_URL, DSH_MODEL, DSH_API_KEY. The first model id in
- * the comma-separated DSH_MODEL becomes the default.
+ * Reads DSH_HOME, DSH_BASE_URL, DSH_MODEL.
+ *
+ * Two routes, chosen by DSH_BASE_URL:
+ *
+ *   - unset — dsh's official DeepSeek route. Only the default-model selection
+ *     is written, naming provider `deepseek-official`; the model catalog and
+ *     the credential stay dsh's own.
+ *   - set — an OpenAI-compatible gateway, declared under `llm-pi-ai` with an
+ *     `apiKeyEnv` naming the environment variable the key travels in. Every id
+ *     in the comma-separated DSH_MODEL is registered there and the first
+ *     becomes the default selection.
+ *
+ * The value `default` (or an empty value) is a sentinel meaning "no explicit
+ * choice". On the official route it writes nothing, leaving dsh its own
+ * default model. On the custom route it is an error: a hand-declared gateway
+ * has no built-in catalog, so a session without an explicit id could not
+ * serve a request at all.
  *
  * The block is delimited so a re-run replaces it instead of appending a second
  * declaration; dsh rejects a whole settings.yaml that declares the same top
  * level key twice.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
 const HOME = process.env.DSH_HOME
-const BASE_URL = process.env.DSH_BASE_URL
-const MODEL = process.env.DSH_MODEL
+const BASE_URL = (process.env.DSH_BASE_URL ?? '').trim()
+const MODEL = (process.env.DSH_MODEL ?? '').trim()
 
 if (!HOME) throw new Error('settings: DSH_HOME is required')
-if (!BASE_URL) throw new Error('settings: DSH_BASE_URL is required')
-// MODEL has no such guard: the action always passes a value (its default is
-// "default"), and an empty list is caught below with a clearer message.
 
 const BEGIN = '# >>> dsh-action-managed'
 const END = '# <<< dsh-action-managed'
+
+/** The provider route llm-deepseek registers for the official endpoint. */
+const OFFICIAL_PROVIDER = 'deepseek-official'
+
+/** Whether the caller named no model, leaving the choice to dsh. */
+const isSentinel = MODEL === '' || MODEL === 'default'
 
 /** Single-quote a YAML scalar, doubling embedded quotes. */
 const yaml = (value) => `'${String(value).replaceAll("'", "''")}'`
@@ -50,7 +69,9 @@ function stripManaged(text) {
 /**
  * Drop hand-written top-level keys the managed block owns. Two declarations of
  * one top-level key (say a second `llm-pi-ai` added through the web UI) make dsh
- * reject the document, so the managed block must be the only one.
+ * reject the document, so the managed block must be the only one. Both keys are
+ * stripped on every route, so switching between them cannot leave the other
+ * route's configuration behind.
  */
 function stripKeys(text) {
   const lines = text.split('\n')
@@ -69,8 +90,7 @@ function stripKeys(text) {
   return kept.join('\n')
 }
 
-const ids = MODEL.split(',').map((id) => id.trim()).filter((id) => id !== '')
-if (ids.length === 0) throw new Error('settings: DSH_MODEL contains no model ids')
+const ids = isSentinel ? [] : MODEL.split(',').map((id) => id.trim()).filter((id) => id !== '')
 
 const settingsPath = join(HOME, 'settings.yaml')
 mkdirSync(HOME, { recursive: true })
@@ -78,10 +98,34 @@ mkdirSync(HOME, { recursive: true })
 let existing = existsSync(settingsPath) ? readFileSync(settingsPath, 'utf8') : ''
 existing = stripKeys(stripManaged(existing)).trimEnd()
 
-// Declaring reasoningEfforts opts each model into the selectable-thinking UI.
-// The seven levels map to OpenAI-compatible wire spellings; `off` sends no
-// reasoning field, matching the provider-wide default below.
-const modelBlocks = ids.map((id) => `        - id: ${yaml(id)}
+let block = ''
+let description = ''
+
+if (BASE_URL === '') {
+  // The official route needs no provider block: llm-deepseek already owns the
+  // route, its catalog, and its default credential name. Only the selection is
+  // written, and only when the caller made one — with no choice there is
+  // nothing to say, and staying silent leaves dsh free to change its own
+  // default model without this action pinning it.
+  if (!isSentinel) {
+    block = `${BEGIN}
+agent-default-model:
+  provider: ${yaml(OFFICIAL_PROVIDER)}
+  model: ${yaml(ids[0])}
+${END}`
+    description = `official DeepSeek, default model ${ids[0]}`
+  } else {
+    description = 'official DeepSeek, dsh default model'
+  }
+} else {
+  if (ids.length === 0) {
+    throw new Error(`settings: DSH_BASE_URL is set, so DSH_MODEL must name at least one model id (got ${JSON.stringify(MODEL)})`)
+  }
+
+  // Declaring reasoningEfforts opts each model into the selectable-thinking UI.
+  // The seven levels map to OpenAI-compatible wire spellings; `off` sends no
+  // reasoning field, matching the provider-wide default below.
+  const modelBlocks = ids.map((id) => `        - id: ${yaml(id)}
           reasoningEfforts:
             off: null
             minimal: minimal_effort
@@ -93,7 +137,7 @@ const modelBlocks = ids.map((id) => `        - id: ${yaml(id)}
           compat:
             supportsReasoningEffort: true`).join('\n')
 
-const block = `${BEGIN}
+  block = `${BEGIN}
 llm-pi-ai:
   providers:
     custom:
@@ -109,7 +153,19 @@ agent-default-model:
   provider: custom
   model: ${yaml(ids[0])}
 ${END}`
+  description = `${ids.length} model(s) at ${BASE_URL}, default ${ids[0]}`
+}
 
-const next = existing === '' ? `${block}\n` : `${existing}\n\n${block}\n`
-writeFileSync(settingsPath, next)
-console.log(`settings: wrote ${ids.length} model(s) to ${settingsPath}, default ${ids[0]}`)
+const next = block === ''
+  ? existing
+  : existing === '' ? block : `${existing}\n\n${block}`
+
+if (next.trim() === '') {
+  // Nothing to configure and nothing left over. An empty settings.yaml is not
+  // the same as no file: dsh reads the file it finds.
+  rmSync(settingsPath, { force: true })
+  console.log(`settings: ${description}; no file needed`)
+} else {
+  writeFileSync(settingsPath, `${next}\n`)
+  console.log(`settings: ${description}; wrote ${settingsPath}`)
+}
