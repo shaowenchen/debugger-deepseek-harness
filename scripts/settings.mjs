@@ -25,7 +25,8 @@ const MODEL = process.env.DSH_MODEL
 
 if (!HOME) throw new Error('settings: DSH_HOME is required')
 if (!BASE_URL) throw new Error('settings: DSH_BASE_URL is required')
-if (!MODEL) throw new Error('settings: DSH_MODEL is required')
+// MODEL has no such guard: the action always passes a value (its default is
+// "default"), and an empty list is caught below with a clearer message.
 
 const BEGIN = '# >>> dsh-action-managed'
 const END = '# <<< dsh-action-managed'

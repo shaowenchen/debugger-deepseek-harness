@@ -32,7 +32,7 @@ inputs:
   model:
     description: 'Model id(s), comma-separated.'
     required: false
-    default: ''
+    default: 'default'
   workspace_dir:
     description: 'Directory the session works in.'
     required: false
@@ -59,19 +59,11 @@ runs:
       shell: bash
       env:
         DSH_VERSION: ${{ inputs.version }}
-        DSH_BASE_URL: ${{ inputs.base_url }}
-        DSH_MODEL: ${{ inputs.model }}
       run: |
         set -euo pipefail
         [ -n "$DSH_VERSION" ] || { echo "::error::version is required"; exit 1; }
-        # base_url and model must agree: both for a custom gateway, neither for
-        # the official DeepSeek route.
-        if [ -n "$DSH_BASE_URL" ] && [ -z "$DSH_MODEL" ]; then
-          echo "::error::base_url is set without model" ; exit 1
-        fi
-        if [ -n "$DSH_MODEL" ] && [ -z "$DSH_BASE_URL" ]; then
-          echo "::error::model is set without base_url" ; exit 1
-        fi
+        # base_url and model are independent: model has a default, so requiring
+        # one to accompany the other would make the common case fail.
 
     - name: Install ngrok
       if: inputs.ngrok_token != ''

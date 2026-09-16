@@ -28,7 +28,7 @@ set -euo pipefail
 : "${DSH_PASSWORD:=}"
 : "${DSH_API_KEY:=}"
 : "${DSH_BASE_URL:=}"
-: "${DSH_MODEL:=}"
+: "${DSH_MODEL:=default}"
 : "${DSH_LOG_LEVEL:=}"
 : "${DSH_EXTRA_ARGS:=}"
 : "${NGROK_TOKEN:=}"
@@ -67,12 +67,12 @@ if [ -z "$DSH_PASSWORD" ]; then
   log "generated a session password"
 fi
 
-if [ -z "$DSH_BASE_URL" ] && [ -z "$DSH_MODEL" ]; then
+# The route is decided by base_url alone. model always has a value (it defaults
+# to "default"), so it cannot be the signal for "use the official endpoint".
+if [ -z "$DSH_BASE_URL" ]; then
   MODEL_TEXT="official DeepSeek"
-elif [ -n "$DSH_BASE_URL" ] && [ -n "$DSH_MODEL" ]; then
-  MODEL_TEXT="$DSH_MODEL @ $DSH_BASE_URL"
 else
-  die "set both 'base_url' and 'model', or neither (neither = official DeepSeek)"
+  MODEL_TEXT="$DSH_MODEL @ $DSH_BASE_URL"
 fi
 
 # Credentials must never reach the log, including through a failing command.
