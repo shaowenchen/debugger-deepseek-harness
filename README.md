@@ -25,24 +25,19 @@ from anywhere.
 
 ## Secrets
 
-Every one of these is a **default**. Leave the matching field empty on the
-Run-workflow form and the secret is used; fill the field in and that value wins
-for that one run.
+Create these under **Settings → Secrets and variables → Actions → Secrets**.
 
-| Secret | Required | Used when the field is empty | What it is |
-|---|---|---|---|
-| `API_KEY` | yes | always | Your model API key |
-| `PASSWORD` | yes | always | The password you sign in with |
-| `NGROK_TOKEN` | for a link | always | An [ngrok authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) |
-| `BASE_URL` | no | `base_url` empty | Gateway address; empty = official DeepSeek |
-| `MODEL` | no | `model` empty | Model id(s), comma-separated; the first is the default |
+| Secret | Required | What it is |
+|---|---|---|
+| `API_KEY` | yes | Your model API key |
+| `PASSWORD` | yes | The password you sign in with |
+| `NGROK_TOKEN` | for a link | An [ngrok authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) |
+| `BASE_URL` | no | Model API endpoint; empty = official DeepSeek |
+| `MODEL` | no | Model id(s), comma-separated; the first is the default |
 
-`API_KEY` and `PASSWORD` have no input at all: they are secrets from end to end,
-because a workflow input is plain text in the run payload. The other four are
-offered as inputs as well because an address, a model id, and a domain name are
-not credentials.
-
-Create them under **Settings → Secrets and variables → Actions → Secrets**.
+Only `MODEL` has a matching field on the Run-workflow form, so a model can be
+tried without editing secrets. The rest are secrets end to end, because a
+workflow input is plain text any reader of the run can see.
 
 ## Quick start
 
@@ -63,8 +58,8 @@ Three values decide which model answers, and they map one-to-one onto what
 
 | | Where it comes from | Notes |
 |---|---|---|
-| **Base URL** | `BASE_URL` secret, or the `base_url` field for one run | Empty = the official DeepSeek endpoint |
-| **Model** | `MODEL` secret, or the `model` field for one run | Comma-separated for several; the first is the default |
+| **Base URL** | the `BASE_URL` secret | Empty = the official DeepSeek endpoint |
+| **Model** | `MODEL` secret, overridable by the `model` field for one run | Comma-separated for several; the first is the default |
 | **API key** | the `API_KEY` secret, and nothing else | Never an input — workflow inputs are plain text in the run |
 
 To point at your own gateway, set the `BASE_URL` and `MODEL` secrets once. Leave
@@ -112,7 +107,7 @@ To give the session the repository instead, check it out and point at it:
 
 The session starts in an empty `workspace/` directory of its own, so it begins
 with a clean slate — nothing from this repository is in the way. Point
-`workspace_dir` at an absolute path to work somewhere else.
+`workspace_dir` at an absolute path to work somewhere else, as above.
 
 ## Why there is a password gateway
 

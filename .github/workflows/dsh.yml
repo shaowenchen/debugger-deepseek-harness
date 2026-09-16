@@ -21,16 +21,8 @@ on:
           - '0.1.2-rc.1'
           # npm's `latest` tag, resolved at install time so it cannot go stale.
           - 'latest'
-      base_url:
-        description: 'Gateway address'
-        type: string
-        default: ''
       model:
-        description: 'Model id(s), comma-separated'
-        type: string
-        default: ''
-      workspace:
-        description: 'Directory to work in'
+        description: 'Model'
         type: string
         default: ''
 
@@ -54,11 +46,13 @@ jobs:
 
       - uses: ./
         with:
-          # Credentials are secrets only; routing takes the input, else the secret.
+          # Credentials are secrets only. base_url comes from its secret too:
+          # it is set once and rarely changed, so it needs no form field.
           api_key: ${{ secrets.API_KEY }}
           password: ${{ secrets.PASSWORD }}
           version: ${{ inputs.version }}
-          base_url: ${{ inputs.base_url || secrets.BASE_URL }}
+          base_url: ${{ secrets.BASE_URL }}
           model: ${{ inputs.model || secrets.MODEL }}
           ngrok_token: ${{ secrets.NGROK_TOKEN }}
-          workspace_dir: ${{ inputs.workspace }}
+          # workspace_dir is left to the action's default (an empty workspace/),
+          # so it needs no form field.
