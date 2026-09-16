@@ -66,12 +66,14 @@ live:
 
 Leave `BASE_URL` unset to use the official DeepSeek endpoint, where `API_KEY` is
 your DeepSeek key and `MODEL` selects among the endpoint's own models. Set it to
-point at any OpenAI-compatible gateway; `MODEL` is then required, because a
-gateway you declare by hand has no built-in catalog to fall back on.
+point at any OpenAI-compatible gateway, where `MODEL` names the ids that gateway
+serves.
 
-`MODEL` (or the `model` field) may also be left as `default`, the value the
-action reads as *no explicit choice*: the official route then keeps `dsh`'s own
-default model instead of pinning one the action would have to track.
+`MODEL` and the `model` field are independent of `BASE_URL`, and both default to
+`default`. On the official endpoint `default` means *no explicit choice*: `dsh`
+keeps its own default model rather than this action pinning one. On a custom
+gateway it is an ordinary model id — the gateway is yours, so a model actually
+named `default` works like any other.
 
 ```yaml
 # one run against a different model, no secret edits:

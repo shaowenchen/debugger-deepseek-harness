@@ -226,12 +226,22 @@ jobs:
           test "$(grep -c '^llm-pi-ai:' /tmp/settings-official2/settings.yaml)" = 0
           grep -q "model: 'deepseek-v4-pro'" /tmp/settings-official2/settings.yaml
 
-          # A custom route with no usable model id cannot serve a request: a
-          # hand-declared gateway has no built-in catalog to fall back on, so
-          # this must fail loudly instead of writing an unusable session.
-          if DSH_HOME=/tmp/settings-home DSH_BASE_URL=https://gateway.example/v1 \
-               DSH_MODEL='default' node scripts/settings.mjs 2>/dev/null; then
-            echo 'a custom route with the sentinel model should have been refused' >&2
+          # On a custom route `default` is an ordinary model id, not a sentinel:
+          # the gateway belongs to the caller, and refusing the value would fail
+          # a session whose gateway really does serve a model of that name.
+          # It must register and become the default selection.
+          rm -rf /tmp/settings-custom-default && mkdir -p /tmp/settings-custom-default
+          DSH_HOME=/tmp/settings-custom-default \
+          DSH_BASE_URL=https://gateway.example/v1 DSH_MODEL='default' \
+            node scripts/settings.mjs
+          grep -q "id: 'default'" /tmp/settings-custom-default/settings.yaml
+          grep -q "model: 'default'" /tmp/settings-custom-default/settings.yaml
+
+          # An empty model id on a custom route has no valid declaration to
+          # write — a provider block must list at least one model.
+          if DSH_HOME=/tmp/settings-custom-default DSH_BASE_URL=https://gateway.example/v1 \
+               DSH_MODEL='' node scripts/settings.mjs 2>/dev/null; then
+            echo 'a custom route with an empty model id should have been refused' >&2
             exit 1
           fi
 

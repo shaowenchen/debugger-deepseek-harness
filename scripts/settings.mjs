@@ -21,11 +21,10 @@
  *     in the comma-separated DSH_MODEL is registered there and the first
  *     becomes the default selection.
  *
- * The value `default` (or an empty value) is a sentinel meaning "no explicit
- * choice". On the official route it writes nothing, leaving dsh its own
- * default model. On the custom route it is an error: a hand-declared gateway
- * has no built-in catalog, so a session without an explicit id could not
- * serve a request at all.
+ * On the OFFICIAL route the value `default` (or an empty value) is a sentinel
+ * meaning "no explicit choice": nothing is written, leaving dsh its own default
+ * model. On a CUSTOM route `default` is an ordinary model id — see
+ * {@link isSentinel} for why the two routes differ.
  *
  * The block is delimited so a re-run replaces it instead of appending a second
  * declaration; dsh rejects a whole settings.yaml that declares the same top
@@ -47,7 +46,17 @@ const END = '# <<< dsh-action-managed'
 /** The provider route llm-deepseek registers for the official endpoint. */
 const OFFICIAL_PROVIDER = 'deepseek-official'
 
-/** Whether the caller named no model, leaving the choice to dsh. */
+/**
+ * Whether the caller named no model. An empty value means that outright; the
+ * literal `default` is the workflow form's default, so it reads the same way.
+ *
+ * This only means "leave it to the endpoint" on the OFFICIAL route, which has
+ * its own default model to fall back on. On a custom route the id is used
+ * literally: the gateway belongs to the caller, and this action cannot know
+ * which ids it accepts — refusing the value would fail a session whose gateway
+ * serves a model actually called `default`, and would make `base_url` depend on
+ * `model` having a non-default value.
+ */
 const isSentinel = MODEL === '' || MODEL === 'default'
 
 /** Single-quote a YAML scalar, doubling embedded quotes. */
@@ -90,7 +99,16 @@ function stripKeys(text) {
   return kept.join('\n')
 }
 
-const ids = isSentinel ? [] : MODEL.split(',').map((id) => id.trim()).filter((id) => id !== '')
+/**
+ * The model ids to register, in order; the first becomes the default.
+ *
+ * On the official route the sentinel names no model at all. On a custom route
+ * it is an ordinary id, so it survives — see {@link isSentinel}.
+ */
+const parseIds = (text) => text.split(',').map((id) => id.trim()).filter((id) => id !== '')
+const ids = BASE_URL === ''
+  ? (isSentinel ? [] : parseIds(MODEL))
+  : parseIds(MODEL)
 
 const settingsPath = join(HOME, 'settings.yaml')
 mkdirSync(HOME, { recursive: true })
@@ -119,7 +137,10 @@ ${END}`
   }
 } else {
   if (ids.length === 0) {
-    throw new Error(`settings: DSH_BASE_URL is set, so DSH_MODEL must name at least one model id (got ${JSON.stringify(MODEL)})`)
+    // Only an empty value lands here now: `default` is a usable id on this
+    // route (see isSentinel). A provider block with no models is not a valid
+    // declaration, so an empty list cannot be written.
+    throw new Error('settings: DSH_BASE_URL is set, so DSH_MODEL must name at least one model id')
   }
 
   // Declaring reasoningEfforts opts each model into the selectable-thinking UI.
