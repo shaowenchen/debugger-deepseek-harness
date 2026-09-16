@@ -77,6 +77,55 @@ jobs:
           print(f'{len(declared)} inputs declared, all forwarded')
           PY
 
+      - name: Workflow contexts are legal for the keys that use them
+        # `concurrency` may read only github/inputs/vars — reaching for a secret
+        # there fails the whole workflow at parse time, which surfaces as "the
+        # workflow stopped running" rather than as an error anyone can read.
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import glob, re, sys, yaml
+          # Contexts allowed per workflow key, from GitHub's context-availability
+          # table. Only the keys this repo actually uses are listed.
+          ALLOWED = {
+              'concurrency': {'github', 'inputs', 'vars'},
+              'env': {'github', 'secrets', 'inputs', 'vars'},
+          }
+          bad = []
+          for path in glob.glob('.github/workflows/*.yml'):
+              doc = yaml.safe_load(open(path))
+              for key, allowed in ALLOWED.items():
+                  if key not in doc:
+                      continue
+                  used = set(re.findall(r'\b(github|secrets|inputs|vars|needs|matrix|env)\.', str(doc[key])))
+                  illegal = used - allowed
+                  if illegal:
+                      bad.append(f'{path}: {key} uses {sorted(illegal)}, allowed {sorted(allowed)}')
+          if bad:
+              print('\n'.join(bad), file=sys.stderr)
+              sys.exit(1)
+          print('workflow context usage is legal')
+          PY
+
+      - name: Documented secrets match the workflow
+        # The README tells the user which secrets to create. A rename that
+        # updates only one of the two leaves them configuring a secret that
+        # nothing reads.
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import glob, re, sys
+          used = set()
+          for path in glob.glob('.github/workflows/*.yml'):
+              used |= set(re.findall(r'secrets\.([A-Z][A-Z0-9_]*)', open(path).read()))
+          documented = set(re.findall(r'^\| `([A-Z][A-Z0-9_]*)` \|', open('README.md').read(), re.M))
+          undocumented = used - documented
+          if undocumented:
+              print(f'secrets used but missing from the README table: {sorted(undocumented)}', file=sys.stderr)
+              sys.exit(1)
+          print(f'{len(used)} secrets used, all documented: {sorted(used)}')
+          PY
+
   # The gateway is the part with real logic in it (cookie isolation, token
   # re-minting, the WebSocket relay), so it is tested against a real dsh rather
   # than a mock. This job is the reason the action can claim any of that works.

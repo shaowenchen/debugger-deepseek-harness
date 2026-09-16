@@ -5,66 +5,60 @@
 #   gh workflow run dsh.yml
 #   gh workflow run dsh.yml -f model=some-other-model
 #
+# Every secret below is a DEFAULT. Leave a field empty on the Run-workflow form
+# and the secret is used; fill it in and that value wins for this one run.
+#
 # What to expect once it starts:
-#   * open the run's Summary, take the link, sign in with your PASSWORD;
+#   * open the run's Summary, take the link, sign in with your password;
 #   * the harness is ready to use — no setup inside it;
 #   * the session ends when you Cancel workflow, or when the job times out.
 #
-# Nothing is persisted between sessions unless S3 inputs are configured —
+# Nothing is persisted between sessions unless S3 secrets are configured —
 # every run starts from a clean workspace.
 name: DeepSeek Harness
 
 on:
   workflow_dispatch:
     inputs:
-      # The gateway address and model come from the workflow file (below), so a
-      # normal run needs no typing at all. These inputs exist only to override
-      # them for one run.
+      # All optional. Empty means "use the secret of the same name", so a normal
+      # run is just pressing the button.
       #
       # Workflow inputs are plain text in the run payload — anyone who can see
-      # the run can read them. That is fine for an address and a model id, and
-      # it is why the API key and the password are secrets instead.
+      # the run can read them. That is fine for an address, a model id, or a
+      # domain name, and it is exactly why the API key and password are
+      # *secrets only* and have no input here.
       base_url:
-        description: 'Override the gateway address for this run. Empty uses the default below.'
+        description: 'Gateway address. Empty -> the BASE_URL secret.'
         type: string
         default: ''
       model:
-        description: 'Override the model for this run. Empty uses the default below.'
+        description: 'Model id, comma-separated for several. Empty -> the MODEL secret.'
         type: string
         default: ''
       ngrok_domain:
-        description: 'Reserved ngrok domain, e.g. my-dsh.ngrok.app. Empty picks a random one.'
+        description: 'Reserved ngrok domain. Empty -> the NGROK_DOMAIN secret, else a random one.'
         type: string
         default: ''
       repo:
-        description: 'Name for this workspace, so parallel sessions do not share a directory.'
+        description: 'Workspace name. Empty -> the REPO variable, else "default".'
         type: string
-        default: repo
+        default: ''
       mount:
-        description: 'Mount this repository read-only at /workspace inside the session.'
-        type: boolean
-        default: true
+        description: 'Mount this repository read-only at /workspace. Empty -> true.'
+        type: string
+        default: ''
 
 permissions:
   contents: read
 
 concurrency:
-  # Keyed by workspace name: a second run for the same workspace queues rather
-  # than fighting the first over the same host ports.
-  group: dsh-${{ inputs.repo }}
+  # `concurrency` may read only github/inputs/vars — NOT secrets, which would
+  # fail the whole workflow at parse time. That is why the workspace name's
+  # persisted default is the REPO *variable*: a secret could not be read here,
+  # and using a different source here than for workspace_dir would put two
+  # different workspaces in one queue group.
+  group: dsh-${{ inputs.repo || vars.REPO || 'default' }}
   cancel-in-progress: false
-
-env:
-  # ── Point these at your gateway ─────────────────────────────────────────────
-  # Fill in BOTH to use a custom OpenAI-compatible gateway, for example:
-  #   BASE_URL: https://gateway.example/v1
-  #   MODEL: my-model-id
-  #
-  # Leave both empty to use the official DeepSeek endpoint, where API_KEY is
-  # your DeepSeek key. Setting only one is an error the action reports before
-  # it starts anything, rather than letting dsh fail later.
-  BASE_URL: ''
-  MODEL: ''
 
 jobs:
   dsh:
@@ -76,14 +70,15 @@ jobs:
 
       - uses: ./
         with:
-          # API key and password are secrets and nothing else — never inputs,
-          # which are plain text in the run payload.
+          # Credentials: secrets only, never inputs. The action fails fast if
+          # the key is blank.
           api_key: ${{ secrets.API_KEY }}
           password: ${{ secrets.PASSWORD }}
-          # Address and model: the run's input wins, else the default above.
-          base_url: ${{ inputs.base_url || env.BASE_URL }}
-          model: ${{ inputs.model || env.MODEL }}
+          # Everything below: the run's input when filled, else the secret.
+          # `repo` reads the REPO variable to match the concurrency group above.
+          base_url: ${{ inputs.base_url || secrets.BASE_URL }}
+          model: ${{ inputs.model || secrets.MODEL }}
           ngrok_token: ${{ secrets.NGROK_TOKEN }}
-          ngrok_domain: ${{ inputs.ngrok_domain }}
-          workspace_dir: ${{ inputs.repo }}
+          ngrok_domain: ${{ inputs.ngrok_domain || secrets.NGROK_DOMAIN }}
+          workspace_dir: ${{ inputs.repo || vars.REPO }}
           mount_repo: ${{ inputs.mount }}

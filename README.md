@@ -23,17 +23,45 @@ from anywhere.
 
 ## Quick start
 
-Add three secrets, run the workflow, sign in. That's the whole loop.
+## Secrets
 
-| Secret | Required | What it is |
-|---|---|---|
-| `API_KEY` | yes | Your model API key |
-| `PASSWORD` | yes | The password you sign in with |
-| `NGROK_TOKEN` | yes for a public link | An [ngrok authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) |
+Every one of these is a **default**. Leave the matching field empty on the
+Run-workflow form and the secret is used; fill the field in and that value wins
+for that one run.
 
-Then: **Actions → DeepSeek Harness → Run workflow**. Open the link from the
-run's **Summary**, type your password, and start working — the session opens on
-a ready workspace, so there is nothing to set up first.
+| Secret | Required | Used when the field is empty | What it is |
+|---|---|---|---|
+| `API_KEY` | yes | always | Your model API key |
+| `PASSWORD` | yes | always | The password you sign in with |
+| `NGROK_TOKEN` | for a link | always | An [ngrok authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) |
+| `BASE_URL` | no | `base_url` empty | Gateway address; empty = official DeepSeek |
+| `MODEL` | no | `model` empty | Model id(s), comma-separated; the first is the default |
+| `NGROK_DOMAIN` | no | `ngrok_domain` empty | Reserved ngrok domain, e.g. `my-dsh.ngrok.app` |
+
+`API_KEY` and `PASSWORD` have no input at all: they are secrets from end to end,
+because a workflow input is plain text in the run payload. The other four are
+offered as inputs as well because an address, a model id, and a domain name are
+not credentials.
+
+Create them under **Settings → Secrets and variables → Actions → Secrets**.
+
+### One value that is a variable, not a secret
+
+| Variable | Required | Used when | What it is |
+|---|---|---|---|
+| `REPO` | no | the `repo` field is empty | Workspace name, so parallel sessions do not share a directory |
+
+It is a **variable** rather than a secret because the `concurrency` group has to
+read it, and GitHub allows only `github`, `inputs`, and `vars` there — referencing
+a secret in `concurrency` fails the whole workflow at parse time. Put it under
+the **Variables** tab. If you never run two sessions at once, skip it.
+
+## Quick start
+
+Add `API_KEY`, `PASSWORD`, and `NGROK_TOKEN`. Then: **Actions → DeepSeek
+Harness → Run workflow**. Open the link from the run's **Summary**, type your
+password, and start working — the session opens on a ready workspace, so there
+is nothing to set up first.
 
 The session ends when you hit **Cancel workflow**, or when the job's
 `timeout-minutes` fires — there is no "duration" knob to set, because the job
@@ -47,32 +75,17 @@ Three values decide which model answers, and they map one-to-one onto what
 
 | | Where it comes from | Notes |
 |---|---|---|
-| **Base URL** | `BASE_URL` in the workflow's `env:` block | Empty = the official DeepSeek endpoint |
-| **Model** | `MODEL` in the same block | Comma-separated for several; the first is the default |
+| **Base URL** | `BASE_URL` secret, or the `base_url` field for one run | Empty = the official DeepSeek endpoint |
+| **Model** | `MODEL` secret, or the `model` field for one run | Comma-separated for several; the first is the default |
 | **API key** | the `API_KEY` secret, and nothing else | Never an input — workflow inputs are plain text in the run |
 
-To point at your own gateway, edit the two lines near the top of
-`.github/workflows/dsh.yml`:
-
-```yaml
-env:
-  BASE_URL: https://gateway.example/v1
-  MODEL: your-model-id
-```
-
-Leave both empty to use the official DeepSeek endpoint, where `API_KEY` is your
+To point at your own gateway, set the `BASE_URL` and `MODEL` secrets once. Leave
+both unset to use the official DeepSeek endpoint, where `API_KEY` is your
 DeepSeek key. Setting only one is an error the action reports before it starts
 anything, rather than letting `dsh` fail later on a half-configured route.
 
-Both are stored in the workflow file rather than as secrets, so a normal run
-needs no typing. The Run-workflow form offers `base_url` and `model` overrides
-for a single run — useful for trying another model without editing the file.
-Those overrides are safe to put in an input precisely because an address and a
-model id are not credentials; the API key and password are secrets for exactly
-that reason.
-
 ```yaml
-# one run against a different model, no file edits:
+# one run against a different model, no secret edits:
 gh workflow run dsh.yml -f model=some-other-model
 ```
 

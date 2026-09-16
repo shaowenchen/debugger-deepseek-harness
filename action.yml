@@ -180,7 +180,10 @@ runs:
         DSH_MOUNT_REPO: ${{ inputs.mount_repo }}
       run: |
         set -euo pipefail
-        if [ "$DSH_MOUNT_REPO" != "true" ]; then
+        # Only an explicit "false" disables the mount; empty means "not set", so
+        # it keeps the default. Testing for "!= true" instead would silently
+        # stop mounting the checkout for every caller that left the input blank.
+        if [ "$DSH_MOUNT_REPO" = "false" ]; then
           # The action script always mounts the checkout; disabling it means
           # pointing the mount at an empty scratch directory instead.
           mkdir -p "$RUNNER_TEMP/dsh-no-repo"
