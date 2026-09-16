@@ -101,19 +101,54 @@ log "installed: $(dsh --version 2>/dev/null || echo "$DSH_VERSION")"
 PUBLIC_URL_OVERRIDE=""
 if [ -n "$NGROK_TOKEN" ]; then
   log "opening the ngrok tunnel (https -> 127.0.0.1:${GATEWAY_PORT})"
-  ngrok config add-authtoken "$NGROK_TOKEN" >"$RUNTIME_DIR/ngrok.log" 2>&1 \
-    || die "ngrok rejected the authtoken; check the NGROK_TOKEN secret"
-  # --log stdout keeps the agent's own output in this job log, so a tunnel
-  # failure is diagnosable from the run.
+
+  # The local port is a POSITIONAL argument to `ngrok http`, not an `--addr`
+  # flag: passing it as a flag makes the agent exit with a usage error before
+  # any tunnel exists, which is why the link never appeared. (`addr` is only a
+  # config-file field.)
+  set -- http --log stdout --log-format logfmt "$GATEWAY_PORT"
   if [ -n "$NGROK_DOMAIN" ]; then
+    # `--domain` reserves the hostname (v3 CLI spelling); without it ngrok
+    # assigns a random one.
+    set -- "$@" "--domain=${NGROK_DOMAIN}"
     PUBLIC_URL_OVERRIDE="https://${NGROK_DOMAIN}"
-    ngrok http --log stdout --log-format logfmt "--addr=127.0.0.1:${GATEWAY_PORT}" \
-      "--domain=${NGROK_DOMAIN}" >"$RUNTIME_DIR/ngrok.log" 2>&1 &
-  else
-    ngrok http --log stdout --log-format logfmt "--addr=127.0.0.1:${GATEWAY_PORT}" \
-      >"$RUNTIME_DIR/ngrok.log" 2>&1 &
   fi
-  echo $! > "$RUNTIME_DIR/ngrok.pid"
+  ngrok "$@" >"$RUNTIME_DIR/ngrok.log" 2>&1 &
+  ngrok_pid=$!
+  echo $ngrok_pid > "$RUNTIME_DIR/ngrok.pid"
+  # The agent's own output is mirrored into the job log, not just kept in a
+  # file: when a tunnel fails, its reason is the only thing that explains why,
+  # and a file nobody prints hides exactly that. Tailing a file (rather than
+  # piping the process) keeps ngrok.pid pointing at ngrok, so cleanup stops it.
+  # `tail -f` needs the file to exist, and the shell creates it a moment later.
+  for _ in $(seq 1 50); do [ -f "$RUNTIME_DIR/ngrok.log" ] && break; sleep 0.1; done
+  tail -f "$RUNTIME_DIR/ngrok.log" 2>/dev/null | sed 's/^/[ngrok] /' &
+  echo $! > "$RUNTIME_DIR/ngroklog.pid"
+
+  # A bad flag makes the agent exit instantly, and without this check the only
+  # symptom is a missing link minutes later. Confirm it survived startup.
+  sleep 3
+  if ! kill -0 "$ngrok_pid" 2>/dev/null; then
+    sed 's/^/    /' "$RUNTIME_DIR/ngrok.log" 2>/dev/null || true
+    if [ -n "$NGROK_DOMAIN" ]; then
+      # A reserved-domain flag is an optional convenience; refusing to run the
+      # session over it would be worse than losing the stable hostname. The
+      # agent's own message above names what it expected instead.
+      warn "the ngrok agent rejected --domain=${NGROK_DOMAIN}; retrying without it"
+      PUBLIC_URL_OVERRIDE=""
+      ngrok http --log stdout --log-format logfmt "$GATEWAY_PORT" \
+        >"$RUNTIME_DIR/ngrok.log" 2>&1 &
+      ngrok_pid=$!
+      echo $ngrok_pid > "$RUNTIME_DIR/ngrok.pid"
+      sleep 3
+      kill -0 "$ngrok_pid" 2>/dev/null || {
+        sed 's/^/    /' "$RUNTIME_DIR/ngrok.log" 2>/dev/null || true
+        die "the ngrok agent exited during startup; its output is above"
+      }
+    else
+      die "the ngrok agent exited during startup; its output is above"
+    fi
+  fi
 else
   warn "no ngrok_token given — serving on 127.0.0.1:${GATEWAY_PORT} only, with no public link"
 fi
@@ -259,18 +294,36 @@ gateway_ready || { sed 's/^/    /' "$GATEWAY_LOG" 2>/dev/null || true; die "the 
 # ── 9. publish, then stay alive ─────────────────────────────────────────────
 
 public_url=""
-for _ in $(seq 1 60); do
+# The gateway writes the URL once the ngrok API reports a tunnel; it polls for
+# up to three minutes, so wait at least that long here or this loop gives up
+# while the gateway is still looking and reports a tunnel that then appears.
+for _ in $(seq 1 190); do
   if [ -s "$URL_FILE" ]; then
     public_url=$(head -n 1 "$URL_FILE" | tr -d '[:space:]')
     [ -n "$public_url" ] && break
   fi
-  sleep 2
+  # The gateway dying is worth reporting now rather than after three minutes.
+  kill -0 "$(cat "$RUNTIME_DIR/gateway.pid" 2>/dev/null)" 2>/dev/null || break
+  sleep 1
 done
 
 if [ -n "$public_url" ]; then
   log "session ready: ${public_url}"
 else
   warn "the tunnel never reported a public URL; the session is up on 127.0.0.1:${GATEWAY_PORT}"
+  # The reason is in one of these two logs, and neither is much use unread.
+  if [ -f "$RUNTIME_DIR/ngrok.log" ]; then
+    warn "ngrok said:"
+    tail -n 20 "$RUNTIME_DIR/ngrok.log" | sed 's/^/    /'
+  else
+    # No log at all means the agent never even started.
+    warn "ngrok produced no output; is the NGROK_TOKEN secret set?"
+  fi
+  if kill -0 "$(cat "$RUNTIME_DIR/ngrok.pid" 2>/dev/null)" 2>/dev/null; then
+    warn "the ngrok agent is still running, so the tunnel exists but its local API did not answer on ${NGROK_API_PORT}"
+  else
+    warn "the ngrok agent has exited — see its output above for why"
+  fi
 fi
 
 DSHGW_PASSWORD_SHOWN="$DSH_PASSWORD" \
@@ -300,7 +353,7 @@ echo $! > "$RUNTIME_DIR/logfollow.pid"
 
 cleanup() {
   log "ending the session"
-  for pidfile in gateway.pid ngrok.pid logfollow.pid dsh.pid; do
+  for pidfile in gateway.pid ngrok.pid ngroklog.pid logfollow.pid dsh.pid; do
     [ -f "$RUNTIME_DIR/$pidfile" ] && kill "$(cat "$RUNTIME_DIR/$pidfile")" 2>/dev/null || true
   done
   # The dsh loop's own children outlive the loop's pid; kill the process group

@@ -610,19 +610,35 @@ async function publishUrl() {
   if (PUBLIC_URL_OVERRIDE !== '') {
     publicUrl = PUBLIC_URL_OVERRIDE.replace(/\/+$/u, '')
   } else {
-    for (let attempt = 0; attempt < 60 && publicUrl === ''; attempt += 1) {
-      try {
-        const response = await fetch(`${NGROK_API}/api/tunnels`, { signal: AbortSignal.timeout(2000) })
-        if (response.ok) {
+    // The agent's inspection API defaults to 4040 but steps to the next free
+    // port when that one is taken, so the configured base is a starting point
+    // rather than the whole answer.
+    const base = Number(new URL(NGROK_API).port || '4040')
+    const candidates = Array.from({ length: 5 }, (_, index) => `http://127.0.0.1:${String(base + index)}`)
+    // Bringing a tunnel up can take a while, so wait well past the point where
+    // the rest of the session is already serving.
+    for (let attempt = 0; attempt < 180 && publicUrl === ''; attempt += 1) {
+      for (const candidate of candidates) {
+        try {
+          const response = await fetch(`${candidate}/api/tunnels`, { signal: AbortSignal.timeout(2000) })
+          if (!response.ok) continue
           const body = await response.json()
-          const tunnel = (body.tunnels ?? []).find((entry) => typeof entry.public_url === 'string'
+          // Prefer an https endpoint: the login cookie is marked Secure when
+          // the request arrives over TLS, and a mixed scheme would break it.
+          const tunnels = body.tunnels ?? []
+          const tunnel = tunnels.find((entry) => typeof entry.public_url === 'string'
             && entry.public_url.startsWith('https://'))
-          if (tunnel !== undefined) publicUrl = tunnel.public_url.replace(/\/+$/u, '')
+            ?? tunnels.find((entry) => typeof entry.public_url === 'string')
+          if (tunnel !== undefined) {
+            publicUrl = tunnel.public_url.replace(/\/+$/u, '')
+            log(`public URL: ${publicUrl} (ngrok API on port ${new URL(candidate).port})`)
+            break
+          }
+        } catch {
+          // The agent is not up yet — keep waiting.
         }
-      } catch {
-        // The agent is not up yet — keep waiting.
       }
-      if (publicUrl === '') await new Promise((resolve) => setTimeout(resolve, 500))
+      if (publicUrl === '') await new Promise((resolve) => setTimeout(resolve, 1000))
     }
   }
   if (publicUrl === '') {
