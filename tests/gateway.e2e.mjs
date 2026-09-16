@@ -23,6 +23,13 @@ const GATEWAY = `http://127.0.0.1:${process.env.GATEWAY_PORT ?? '3080'}`
 const DSH = `http://127.0.0.1:${process.env.INNER_PORT ?? '3099'}`
 const DSH_LOG = process.env.DSH_LOG ?? '/tmp/dsh/boot.log'
 const PASSWORD = process.env.DSHGW_PASSWORD ?? 'testpass'
+/**
+ * A path under dsh's fenced `/api` prefix. The fence runs before the handler,
+ * so the status it returns is what distinguishes the two failures: 403 means
+ * the Host/Origin check refused, 401 means the fence passed and only the dsh
+ * cookie was missing. Any other status also proves the fence passed.
+ */
+const API_PROBE = '/api'
 
 let passed = 0
 let failed = 0
@@ -106,6 +113,47 @@ for (const url of assets) {
 }
 check('proxied bytes are identical to direct', differing.length === 0, differing.slice(0, 3).join(', '))
 
+// ── the /api trust fence through the tunnel ─────────────────────────────────
+
+// The bug this guards against: dsh refuses a request whose Origin does not
+// match its Host (`isTrustedApiRequest`), and behind the tunnel the browser's
+// Origin is the public hostname while the gateway rewrites Host to loopback.
+// Every RPC then failed 403 — the page loaded, so nothing looked broken until a
+// directoryPicker call. These checks fail loudly if the gateway ever forwards a
+// browser Origin again.
+
+// Control: against dsh directly, a foreign Origin really is refused. This is
+// the mechanism, not an assumption about it.
+const foreignOrigin = await fetch(`${DSH}${API_PROBE}`, {
+  headers: { cookie: directSession, origin: 'https://public.example' },
+})
+check('dsh directly refuses a mismatched Origin (the fence is real)',
+  foreignOrigin.status === 403, `got ${foreignOrigin.status}`)
+
+// And it accepts the matching one, so the gateway's rewrite is the thing that
+// makes the difference rather than the fence being absent in this build.
+const matchingOrigin = await fetch(`${DSH}${API_PROBE}`, {
+  headers: { cookie: directSession, origin: `http://${new URL(DSH).host}` },
+})
+check('dsh directly accepts a matching Origin',
+  matchingOrigin.status !== 403, `got ${matchingOrigin.status}`)
+
+// The real case: a request shaped like the tunnel's — an Origin naming a public
+// host that is not the inner authority. It must not be refused by the fence.
+const viaGateway = await fetch(`${GATEWAY}${API_PROBE}`, {
+  headers: { cookie: session, origin: 'https://public.example' },
+})
+check('a foreign Origin through the gateway is not refused by the fence',
+  viaGateway.status !== 403, `got ${viaGateway.status}`)
+
+// A cross-site fetch label is refused by the fence regardless of Origin, and
+// the gateway must strip it for the same reason it rewrites Origin.
+const crossSite = await fetch(`${GATEWAY}${API_PROBE}`, {
+  headers: { cookie: session, 'sec-fetch-site': 'cross-site' },
+})
+check('a cross-site label through the gateway is not refused by the fence',
+  crossSite.status !== 403, `got ${crossSite.status}`)
+
 // ── websocket ───────────────────────────────────────────────────────────────
 
 /** Open the RPC mux and report how it resolved. */
@@ -116,6 +164,9 @@ const upgrade = (headers) => new Promise((resolve) => {
   socket.onerror = () => { clearTimeout(timer); resolve('error') }
 })
 check('the RPC mux upgrades for a session', (await upgrade({ cookie: session })) === 'open')
+// The mux carries Origin on a real browser upgrade, so it is the same fence.
+check('the RPC mux upgrades despite a foreign Origin',
+  (await upgrade({ cookie: session, origin: 'https://public.example' })) === 'open')
 check('the RPC mux is refused without one', (await upgrade({})) !== 'open')
 
 console.log(`\n${passed} passed, ${failed} failed`)

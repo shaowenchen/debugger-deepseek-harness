@@ -357,16 +357,34 @@ const HOP_BY_HOP = new Set([
 ])
 
 /**
- * Rewrite browser headers into upstream headers. The Host is replaced with the
- * fixed inner authority so dsh's `/api` trust fence sees loopback, and the
- * Cookie is replaced wholesale with dsh's own cookie — no `dsh-auth-*` value
- * from a browser may reach dsh, and none dsh sets may reach a browser.
+ * Rewrite browser headers into upstream headers. Host, Origin and Cookie are
+ * all replaced, and the reason is the same fence in each case:
+ *
+ * dsh's `/api` guard (`isTrustedApiRequest`) demands that the Host be loopback
+ * AND, when an Origin is present, that `new URL(origin).host` equal the Host
+ * exactly. Behind the tunnel the browser sends `Origin: https://<name>.ngrok.app`
+ * while we rewrite Host to 127.0.0.1:13080, so the two disagree and every RPC —
+ * including `/api/directoryPicker/list` — is answered 403. Rewriting Origin to
+ * the inner authority restores the agreement the fence is checking for. A
+ * browser at the public URL is same-origin with every request it makes, so the
+ * browser's own cross-origin protection is not what keeps this honest: the
+ * password gate below is, since it refuses every path but the login page until
+ * a session cookie verifies.
+ *
+ * `sec-fetch-site` is dropped for the same reason: a proxied navigation can
+ * arrive labelled `cross-site`, which the fence refuses outright.
+ *
+ * Host is also why the Cookie is replaced wholesale with dsh's own — dsh names
+ * its cookie after a hash of the authority, so only a cookie minted for
+ * 127.0.0.1:13080 can be presented to it. No `dsh-auth-*` value from a browser
+ * may reach dsh, and none dsh sets may reach a browser.
  */
 function upstreamHeaders(req, { upgrade = false } = {}) {
   const out = {}
   for (const [name, value] of Object.entries(req.headers)) {
     const lower = name.toLowerCase()
     if (lower === 'host' || lower === 'cookie') continue
+    if (lower === 'origin' || lower === 'sec-fetch-site') continue
     if (lower.startsWith('x-forwarded-')) continue
     // An upgrade keeps `connection`/`upgrade`; everything else hop-by-hop goes.
     if (HOP_BY_HOP.has(lower) && !(upgrade && (lower === 'connection' || lower === 'upgrade'))) continue
@@ -374,6 +392,10 @@ function upstreamHeaders(req, { upgrade = false } = {}) {
     out[lower] = value
   }
   out.host = INNER_AUTHORITY
+  // Same-authority Origin, so dsh's fence sees the agreement it requires. Sent
+  // in both schemes' spellings only as one value: the fence compares hosts, not
+  // schemes, so the scheme here is cosmetic.
+  out.origin = `http://${INNER_AUTHORITY}`
   out['x-forwarded-for'] = clientIp(req)
   out['x-forwarded-proto'] = isSecureRequest(req) ? 'https' : 'http'
   out['x-forwarded-host'] = typeof req.headers.host === 'string' ? req.headers.host : INNER_AUTHORITY
