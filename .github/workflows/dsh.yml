@@ -9,35 +9,32 @@ name: DeepSeek Harness
 on:
   workflow_dispatch:
     inputs:
-      # All optional: empty means "use the secret of the same name", so a normal
-      # run is just pressing the button. None of these is a credential — the API
-      # key and password are secrets only, because a workflow input is plain
-      # text any reader of the run can see.
+      # All optional: leave one blank and the secret of the same name is used.
+      # None of these is a credential — the API key and password are secrets
+      # only, because a workflow input is plain text any reader of the run sees.
       version:
-        description: 'dsh version to install.'
+        description: 'dsh version'
         type: choice
         default: '0.1.2-rc.1'
         options:
-          # The published dsh-web image pins 0.1.2-rc.1, so this runs the same
-          # dsh as that image.
+          # The dsh-web image pins this, so the session runs the same dsh.
           - '0.1.2-rc.1'
-          # Resolves npm's `latest` tag at install time, so it never goes stale
-          # the way a hard-coded version number would.
+          # npm's `latest` tag, resolved at install time so it cannot go stale.
           - 'latest'
       base_url:
-        description: 'Gateway address. Empty -> BASE_URL secret.'
+        description: 'Gateway address'
         type: string
         default: ''
       model:
-        description: 'Model id(s), comma-separated. Empty -> MODEL secret.'
+        description: 'Model id(s), comma-separated'
         type: string
         default: ''
       ngrok_domain:
-        description: 'Reserved ngrok domain. Empty -> NGROK_DOMAIN secret.'
+        description: 'Reserved ngrok domain'
         type: string
         default: ''
       workspace:
-        description: 'Absolute path to work in. Empty -> the repository checkout.'
+        description: 'Directory to work in'
         type: string
         default: ''
 
@@ -52,23 +49,19 @@ concurrency:
 jobs:
   dsh:
     runs-on: ubuntu-latest
-    # The session's lifetime: it ends when you cancel the run or when this fires.
+    # The session's lifetime.
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - uses: ./
         with:
-          # Credentials: secrets only, never inputs.
+          # Credentials are secrets only; routing takes the input, else the secret.
           api_key: ${{ secrets.API_KEY }}
           password: ${{ secrets.PASSWORD }}
-          # Input when filled, else the secret of the same name. `version` has no
-          # secret: it is a choice list with a default, so it is always set.
           version: ${{ inputs.version }}
           base_url: ${{ inputs.base_url || secrets.BASE_URL }}
           model: ${{ inputs.model || secrets.MODEL }}
           ngrok_token: ${{ secrets.NGROK_TOKEN }}
           ngrok_domain: ${{ inputs.ngrok_domain || secrets.NGROK_DOMAIN }}
-          # Empty means the repository checkout, which is what actions/checkout
-          # above already produced — there is no container to mount into.
           workspace_dir: ${{ inputs.workspace }}

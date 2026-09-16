@@ -10,19 +10,19 @@ branding:
 
 inputs:
   api_key:
-    description: 'Model API key. Required.'
+    description: 'Model API key.'
     required: true
     default: ''
   version:
-    description: 'dsh version to install from npm.'
+    description: 'dsh version to install.'
     required: false
     default: '0.1.2-rc.1'
   password:
-    description: 'Password for the session link. Empty generates one.'
+    description: 'Password for the session link.'
     required: false
     default: ''
   ngrok_token:
-    description: 'ngrok authtoken. Without it there is no public link.'
+    description: 'ngrok authtoken.'
     required: false
     default: ''
   ngrok_domain:
@@ -30,15 +30,15 @@ inputs:
     required: false
     default: ''
   base_url:
-    description: 'Gateway address. Set together with model; both empty = official DeepSeek.'
+    description: 'Gateway address.'
     required: false
     default: ''
   model:
-    description: 'Model id(s), comma-separated; the first is the default.'
+    description: 'Model id(s), comma-separated.'
     required: false
     default: ''
   workspace_dir:
-    description: 'Directory the session works in. Empty = the repository checkout.'
+    description: 'Directory the session works in.'
     required: false
     default: ''
   extra_args:
