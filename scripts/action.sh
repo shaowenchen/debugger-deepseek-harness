@@ -137,7 +137,9 @@ docker_args=(
 [ -n "$DSH_S3_REGION" ] && docker_args+=(-e "S3_REGION=${DSH_S3_REGION}")
 [ -n "$DSH_S3_PATH_STYLE" ] && docker_args+=(-e "S3_PATH_STYLE=${DSH_S3_PATH_STYLE}")
 [ -n "$DSH_LOG_LEVEL" ] && docker_args+=(-e "LOG_LEVEL=${DSH_LOG_LEVEL}")
-# shellcheck disable=SC2086 -- deliberately word-split so a caller can pass several flags
+# These two are deliberately word-split so a caller can pass several flags;
+# quoting them would collapse "--cpus 2 --memory 4g" into one bogus argv entry.
+# shellcheck disable=SC2086
 [ -n "$DSH_EXTRA_DOCKER_ARGS" ] && docker_args+=($DSH_EXTRA_DOCKER_ARGS)
 # shellcheck disable=SC2086
 [ -n "$DSH_EXTRA_ARGS" ] && docker_args+=($DSH_EXTRA_ARGS)
