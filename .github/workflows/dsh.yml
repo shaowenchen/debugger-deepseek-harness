@@ -1,50 +1,36 @@
-# Start a DeepSeek Harness session by hand, get a temporary link, sign in with
-# a password, and start working.
-#
-# Trigger it from the Actions tab ("Run workflow"), or:
+# Start a DeepSeek Harness session by hand and get a temporary link.
 #   gh workflow run dsh.yml
 #   gh workflow run dsh.yml -f model=some-other-model
 #
-# Every secret below is a DEFAULT. Leave a field empty on the Run-workflow form
-# and the secret is used; fill it in and that value wins for this one run.
-#
-# What to expect once it starts:
-#   * open the run's Summary, take the link, sign in with your password;
-#   * the harness is ready to use — no setup inside it;
-#   * the session ends when you Cancel workflow, or when the job times out.
-#
-# Nothing is persisted between sessions unless S3 secrets are configured —
-# every run starts from a clean workspace.
+# The Summary of the run carries the link; sign in with your PASSWORD secret.
+# The session ends when you cancel the run or the job times out.
 name: DeepSeek Harness
 
 on:
   workflow_dispatch:
     inputs:
-      # All optional. Empty means "use the secret of the same name", so a normal
-      # run is just pressing the button.
-      #
-      # Workflow inputs are plain text in the run payload — anyone who can see
-      # the run can read them. That is fine for an address, a model id, or a
-      # domain name, and it is exactly why the API key and password are
-      # *secrets only* and have no input here.
+      # All optional: empty means "use the secret of the same name", so a normal
+      # run is just pressing the button. None of these is a credential — the API
+      # key and password are secrets only, because a workflow input is plain
+      # text any reader of the run can see.
       base_url:
-        description: 'Gateway address. Empty -> the BASE_URL secret.'
+        description: 'Gateway address. Empty -> BASE_URL secret.'
         type: string
         default: ''
       model:
-        description: 'Model id, comma-separated for several. Empty -> the MODEL secret.'
+        description: 'Model id(s), comma-separated. Empty -> MODEL secret.'
         type: string
         default: ''
       ngrok_domain:
-        description: 'Reserved ngrok domain. Empty -> the NGROK_DOMAIN secret, else a random one.'
+        description: 'Reserved ngrok domain. Empty -> NGROK_DOMAIN secret.'
         type: string
         default: ''
       repo:
-        description: 'Workspace name. Empty -> "default". Also namespaces parallel sessions.'
+        description: 'Workspace name. Empty -> "default".'
         type: string
         default: ''
       mount:
-        description: 'Mount this repository read-only at /workspace. Empty -> true.'
+        description: 'Mount the checkout at /workspace. Empty -> true.'
         type: string
         default: ''
 
@@ -52,10 +38,8 @@ permissions:
   contents: read
 
 concurrency:
-  # One source for the workspace name — this input — so the queue group and the
-  # workspace directory can never disagree. `concurrency` may read only
-  # github/inputs/vars (a secret here fails the workflow at parse time), and
-  # this reads just the input.
+  # Keyed by workspace name, so parallel sessions queue instead of colliding on
+  # the same host ports.
   group: dsh-${{ inputs.repo || 'default' }}
   cancel-in-progress: false
 
@@ -69,12 +53,10 @@ jobs:
 
       - uses: ./
         with:
-          # Credentials: secrets only, never inputs. The action fails fast if
-          # the key is blank.
+          # Credentials: secrets only, never inputs.
           api_key: ${{ secrets.API_KEY }}
           password: ${{ secrets.PASSWORD }}
-          # Everything below: the run's input when filled, else the secret.
-          # `repo` and `mount` are input-only — neither is a credential.
+          # Input when filled, else the secret of the same name.
           base_url: ${{ inputs.base_url || secrets.BASE_URL }}
           model: ${{ inputs.model || secrets.MODEL }}
           ngrok_token: ${{ secrets.NGROK_TOKEN }}

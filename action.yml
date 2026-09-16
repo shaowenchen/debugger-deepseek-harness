@@ -1,8 +1,7 @@
 name: 'Run DeepSeek Harness'
 description: >-
-  Start an ephemeral DeepSeek Harness (dsh) web session on the runner and expose
-  it through an ngrok tunnel behind a password. The step keeps the session alive
-  until the job's timeout, then tears it down.
+  Start an ephemeral DeepSeek Harness (dsh) web session and expose it through an
+  ngrok tunnel behind a password.
 author: 'shaowenchen'
 
 branding:
@@ -11,102 +10,85 @@ branding:
 
 inputs:
   api_key:
-    description: >-
-      Model API key. Required: the step fails fast without it. For the official
-      DeepSeek route this is a DeepSeek key; with base_url set it is that
-      gateway's key.
+    description: 'Model API key. Required.'
     required: true
     default: ''
   password:
-    description: >-
-      Password that guards the session link. Leave empty to have one generated
-      and printed in the job summary — the link alone never grants access.
+    description: 'Password for the session link. Empty generates one.'
     required: false
     default: ''
   ngrok_token:
-    description: >-
-      ngrok authtoken (store it as a secret). Without it the session still runs,
-      but it is only reachable from the runner itself.
+    description: 'ngrok authtoken. Without it there is no public link.'
     required: false
     default: ''
   ngrok_domain:
-    description: >-
-      Reserved ngrok domain to serve on, e.g. my-dsh.ngrok.app. Empty uses an
-      ngrok-assigned random hostname.
+    description: 'Reserved ngrok domain, e.g. my-dsh.ngrok.app.'
     required: false
     default: ''
   image:
-    description: Container image to run.
+    description: 'Container image.'
     required: false
     default: 'shaowenchen/deepseek-harness-web:latest'
   port:
-    description: >-
-      Port dsh listens on inside the runner's network namespace. The password
-      gateway takes 3080 and proxies to this port.
+    description: 'Port dsh listens on. The gateway takes 3080.'
     required: false
     default: '13080'
   base_url:
-    description: >-
-      OpenAI-compatible gateway for a custom model route. When set, model is
-      required as well; when both are empty, the official DeepSeek route is used.
+    description: 'Gateway address. Set together with model; both empty = official DeepSeek.'
     required: false
     default: ''
   model:
-    description: >-
-      Model id(s) for the custom route, comma-separated; the first becomes the
-      default. Required when base_url is set.
+    description: 'Model id(s), comma-separated; the first is the default.'
     required: false
     default: ''
   workspace_dir:
-    description: Workspace directory pre-created under /root, so the web UI's directory picker has a ready option.
+    description: 'Workspace directory under /root.'
     required: false
     default: 'default'
   mount_repo:
-    description: >-
-      Mount the repository checkout read-only at /workspace, so the session can
-      read the code it was started for.
+    description: 'Mount the checkout read-only at /workspace.'
     required: false
     default: 'true'
   extra_args:
-    description: Extra flags appended to the dsh command line, e.g. '--patch /x.yml'.
+    description: "Extra dsh flags, e.g. '--patch /x.yml'."
     required: false
     default: ''
   extra_docker_args:
-    description: Extra flags appended to docker run, e.g. '--cpus 2 --memory 4g'.
+    description: "Extra docker run flags, e.g. '--cpus 2 --memory 4g'."
     required: false
     default: ''
   log_level:
-    description: Container log level; 'debug' prints per-file sync details.
+    description: "Container log level; 'debug' is verbose."
     required: false
     default: ''
 
   # Optional S3-compatible persistence. Sync is enabled only when s3_bucket is set.
   s3_bucket:
-    description: Bucket that persists the workspace and chat history across sessions.
+    description: 'Bucket persisting the workspace and chat history.'
     required: false
     default: ''
   s3_path:
-    description: Sub-path prefix inside the bucket.
+    description: 'Sub-path prefix in the bucket.'
     required: false
     default: ''
   s3_endpoint:
-    description: S3 endpoint, e.g. https://ks3-cn-beijing.ksyuncs.com.
+    description: 'S3 endpoint URL.'
     required: false
     default: ''
   s3_access_key:
-    description: S3 access key. Required when s3_bucket is set.
+    description: 'S3 access key.'
     required: false
     default: ''
   s3_secret_key:
-    description: S3 secret key. Required when s3_bucket is set.
+    description: 'S3 secret key.'
     required: false
     default: ''
   s3_region:
-    description: S3 region, e.g. cn-beijing.
+    description: 'S3 region, e.g. cn-beijing.'
     required: false
     default: ''
   s3_path_style:
-    description: '0 virtual-host style (AWS/Kingsoft), 1 path-style (MinIO/self-hosted).'
+    description: '0 virtual-host style (AWS), 1 path-style (MinIO).'
     required: false
     default: ''
 
@@ -127,15 +109,13 @@ runs:
         esac
         # 3080 belongs to the gateway; dsh runs behind it.
         [ "$DSH_PORT" != "3080" ] || { echo "::error::port 3080 is reserved for the password gateway; pick another, e.g. 13080"; exit 1; }
-        # A custom gateway needs a model id and vice versa; either both are set
-        # or the run falls back to the official DeepSeek route.
+        # base_url and model must agree: both for a custom gateway, neither for
+        # the official DeepSeek route.
         if [ -n "${DSH_BASE_URL:-}" ] && [ -z "${DSH_MODEL:-}" ]; then
-          echo "::error::base_url is set without model; a custom gateway needs a model id"
-          exit 1
+          echo "::error::base_url is set without model" ; exit 1
         fi
         if [ -n "${DSH_MODEL:-}" ] && [ -z "${DSH_BASE_URL:-}" ]; then
-          echo "::error::model is set without base_url; set the GATEWAY_BASE_URL secret or clear model to use official DeepSeek"
-          exit 1
+          echo "::error::model is set without base_url" ; exit 1
         fi
         command -v docker >/dev/null || { echo "::error::docker is not available on this runner"; exit 1; }
         docker info >/dev/null 2>&1 || { echo "::error::the docker daemon is not reachable on this runner"; exit 1; }
@@ -147,8 +127,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        # Same distribution channel debugger-action uses; the archive is a
-        # single static binary, so no package manager is involved.
+        # Same distribution channel debugger-action uses; a single static binary.
         url="https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz"
         curl -fsSL "$url" | sudo tar -xz -C /usr/local/bin
         sudo chmod +x /usr/local/bin/ngrok
@@ -180,12 +159,9 @@ runs:
         DSH_MOUNT_REPO: ${{ inputs.mount_repo }}
       run: |
         set -euo pipefail
-        # Only an explicit "false" disables the mount; empty means "not set", so
-        # it keeps the default. Testing for "!= true" instead would silently
-        # stop mounting the checkout for every caller that left the input blank.
+        # Only an explicit "false" disables the mount: empty means unset, and
+        # testing for "!= true" would stop mounting for blank callers.
         if [ "$DSH_MOUNT_REPO" = "false" ]; then
-          # The action script always mounts the checkout; disabling it means
-          # pointing the mount at an empty scratch directory instead.
           mkdir -p "$RUNNER_TEMP/dsh-no-repo"
           export GITHUB_WORKSPACE_DIR="$RUNNER_TEMP/dsh-no-repo"
         fi

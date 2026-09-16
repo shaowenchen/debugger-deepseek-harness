@@ -108,9 +108,12 @@ jobs:
           PY
 
       - name: Documented secrets match the workflow
-        # The README tells the user which secrets to create. A rename that
-        # updates only one of the two leaves them configuring a secret that
-        # nothing reads.
+        # Both directions, because both have gone wrong: a secret the workflows
+        # read but the README never mentions leaves the user guessing, and a
+        # name the README still shows after a rename leaves them configuring a
+        # secret nothing reads. The second is checked across the whole README,
+        # not just its table — the stale names that prompted this were in a
+        # copy-paste example.
         run: |
           set -eux
           python3 - <<'PY'
@@ -118,12 +121,22 @@ jobs:
           used = set()
           for path in glob.glob('.github/workflows/*.yml'):
               used |= set(re.findall(r'secrets\.([A-Z][A-Z0-9_]*)', open(path).read()))
-          documented = set(re.findall(r'^\| `([A-Z][A-Z0-9_]*)` \|', open('README.md').read(), re.M))
+          readme = open('README.md').read()
+          documented = set(re.findall(r'^\| `([A-Z][A-Z0-9_]*)` \|', readme, re.M))
+          mentioned = set(re.findall(r'secrets\.([A-Z][A-Z0-9_]*)', readme))
+
+          failed = False
           undocumented = used - documented
           if undocumented:
-              print(f'secrets used but missing from the README table: {sorted(undocumented)}', file=sys.stderr)
+              print(f'secrets read by the workflows but absent from the README table: {sorted(undocumented)}', file=sys.stderr)
+              failed = True
+          stale = mentioned - used
+          if stale:
+              print(f'secrets the README names but no workflow reads: {sorted(stale)}', file=sys.stderr)
+              failed = True
+          if failed:
               sys.exit(1)
-          print(f'{len(used)} secrets used, all documented: {sorted(used)}')
+          print(f'{len(used)} secrets, documented and all in use: {sorted(used)}')
           PY
 
   # The gateway is the part with real logic in it (cookie isolation, token

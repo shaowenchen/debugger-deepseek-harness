@@ -93,10 +93,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: shaowenchen/debugger-deepseek-harness@main
         with:
-          api_key: ${{ secrets.DEEPSEEK_API_KEY }}
+          api_key: ${{ secrets.API_KEY }}
+          password: ${{ secrets.PASSWORD }}
           ngrok_token: ${{ secrets.NGROK_TOKEN }}
-          base_url: ${{ secrets.GATEWAY_BASE_URL }}   # omit for official DeepSeek
-          model: deepseek-chat                        # omit with base_url
+          base_url: ${{ secrets.BASE_URL }}   # omit for official DeepSeek
+          model: ${{ secrets.MODEL }}         # omit with base_url
 ```
 
 The checkout is mounted read-only at `/workspace` inside the session, so the
