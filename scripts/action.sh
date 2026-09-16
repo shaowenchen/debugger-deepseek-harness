@@ -86,11 +86,28 @@ log "model: $MODEL_TEXT"
 
 # A private npm prefix keeps the install writable without sudo and keeps the
 # runner's own global packages untouched.
+#
+# This is the longest silent stretch of the run (hundreds of packages, about a
+# minute) and the step would otherwise show nothing at all while it happens,
+# which reads as a hang. npm is quiet when its output is not a tty, so instead
+# of asking it for verbose output — hundreds of http-fetch lines that would bury
+# the job log — run it in the background and print a heartbeat, keeping the full
+# log on disk for the failure path.
 NPM_PREFIX="$RUNTIME_DIR/npm"
-log "installing @deepseek-ai/dsh@${DSH_VERSION}"
-if ! npm install --global --prefix "$NPM_PREFIX" --no-audit --no-fund \
-      "@deepseek-ai/dsh@${DSH_VERSION}" >"$RUNTIME_DIR/npm.log" 2>&1; then
-  tail -n 30 "$RUNTIME_DIR/npm.log" >&2 || true
+NPM_LOG="$RUNTIME_DIR/npm.log"
+log "installing @deepseek-ai/dsh@${DSH_VERSION} (about a minute)"
+npm install --global --prefix "$NPM_PREFIX" --no-audit --no-fund \
+  "@deepseek-ai/dsh@${DSH_VERSION}" >"$NPM_LOG" 2>&1 &
+npm_pid=$!
+elapsed=0
+while kill -0 "$npm_pid" 2>/dev/null; do
+  sleep 2
+  elapsed=$((elapsed + 2))
+  kill -0 "$npm_pid" 2>/dev/null || break
+  if [ $((elapsed % 10)) -eq 0 ]; then log "  still installing... ${elapsed}s"; fi
+done
+if ! wait "$npm_pid"; then
+  tail -n 30 "$NPM_LOG" | sed 's/^/    /' || true
   die "could not install @deepseek-ai/dsh@${DSH_VERSION}; check that the version exists"
 fi
 export PATH="$NPM_PREFIX/bin:$PATH"
@@ -118,7 +135,10 @@ if [ -n "$NGROK_TOKEN" ]; then
   # piping the process) keeps ngrok.pid pointing at ngrok, so cleanup stops it.
   # `tail -f` needs the file to exist, and the shell creates it a moment later.
   for _ in $(seq 1 50); do [ -f "$RUNTIME_DIR/ngrok.log" ] && break; sleep 0.1; done
-  tail -f "$RUNTIME_DIR/ngrok.log" 2>/dev/null | sed 's/^/[ngrok] /' &
+  # `-u` because the job log is not a tty: without it sed block-buffers and the
+  # agent's output arrives in bursts instead of as it happens, which is the
+  # opposite of what mirroring it is for.
+  tail -f "$RUNTIME_DIR/ngrok.log" 2>/dev/null | sed -u 's/^/[ngrok] /' &
   echo $! > "$RUNTIME_DIR/ngroklog.pid"
 
   # A usage error makes the agent exit instantly, and without this check the
@@ -244,6 +264,17 @@ DSHGW_URL_FILE="$URL_FILE" \
     >"$GATEWAY_LOG" 2>&1 &
 echo $! > "$RUNTIME_DIR/gateway.pid"
 
+# Mirror the gateway's log into the job from here on. It carries three things
+# the job log would otherwise never show: the gateway's own messages, its
+# token/cookie exchanges, and — because the gateway echoes every dsh line it
+# reads from stdin — dsh's output too. Without this the step prints nothing
+# between "starting the password gateway" and the finished summary, which reads
+# as a hang. It also replaces a separate `tail -f` of the dsh log further down,
+# which would have shown the same lines a second time.
+for _ in $(seq 1 50); do [ -f "$GATEWAY_LOG" ] && break; sleep 0.1; done
+tail -f "$GATEWAY_LOG" 2>/dev/null | sed -u 's/^/[gateway] /' &
+echo $! > "$RUNTIME_DIR/gatewaylog.pid"
+
 # ── 8. wait until it answers ────────────────────────────────────────────────
 
 log "waiting for the session to become reachable"
@@ -259,8 +290,19 @@ if ! kill -0 "$(cat "$RUNTIME_DIR/gateway.pid" 2>/dev/null)" 2>/dev/null; then
   sed 's/^/    /' "$GATEWAY_LOG" 2>/dev/null || true
   die "the gateway process did not start"
 fi
-for _ in $(seq 1 90); do
-  dsh_ready && gateway_ready && break
+# dsh boots in a second or two and the gateway answers as soon as it is up, so
+# this normally ends on the first pass. The heartbeat covers the case where it
+# does not: a silent three-minute wait is indistinguishable from a hang, and
+# naming which side is still missing says where to look.
+for attempt in $(seq 1 90); do
+  if dsh_ready && gateway_ready; then break; fi
+  if [ $((attempt % 15)) -eq 0 ]; then
+    dsh_state=no
+    gateway_state=no
+    if dsh_ready; then dsh_state=yes; fi
+    if gateway_ready; then gateway_state=yes; fi
+    log "  waiting... dsh_up=${dsh_state} gateway_up=${gateway_state}"
+  fi
   sleep 2
 done
 dsh_ready || {
@@ -272,16 +314,20 @@ gateway_ready || { sed 's/^/    /' "$GATEWAY_LOG" 2>/dev/null || true; die "the 
 # ── 9. publish, then stay alive ─────────────────────────────────────────────
 
 public_url=""
+log "waiting for the tunnel to report a public URL"
 # The gateway writes the URL once the ngrok API reports a tunnel; it polls for
 # up to three minutes, so wait at least that long here or this loop gives up
 # while the gateway is still looking and reports a tunnel that then appears.
-for _ in $(seq 1 190); do
+for attempt in $(seq 1 190); do
   if [ -s "$URL_FILE" ]; then
     public_url=$(head -n 1 "$URL_FILE" | tr -d '[:space:]')
     [ -n "$public_url" ] && break
   fi
   # The gateway dying is worth reporting now rather than after three minutes.
   kill -0 "$(cat "$RUNTIME_DIR/gateway.pid" 2>/dev/null)" 2>/dev/null || break
+  if [ $((attempt % 20)) -eq 0 ]; then
+    log "  still waiting for the tunnel... ${attempt}s"
+  fi
   sleep 1
 done
 
@@ -324,14 +370,12 @@ echo " The session stays up until you cancel the workflow or the job times out."
 echo "======================================================================"
 echo
 
-# Mirror dsh's own output into the job for the rest of the session, so a crash
-# mid-session is visible in the run instead of only on the user's screen.
-tail -f "$DSH_LOG" 2>/dev/null | sed 's/^/[dsh] /' &
-echo $! > "$RUNTIME_DIR/logfollow.pid"
+# The gateway log is already being mirrored into the job (see above), and it
+# carries dsh's output as well, so there is nothing to tail here.
 
 cleanup() {
   log "ending the session"
-  for pidfile in gateway.pid ngrok.pid ngroklog.pid logfollow.pid dsh.pid; do
+  for pidfile in gateway.pid gatewaylog.pid ngrok.pid ngroklog.pid dsh.pid; do
     [ -f "$RUNTIME_DIR/$pidfile" ] && kill "$(cat "$RUNTIME_DIR/$pidfile")" 2>/dev/null || true
   done
   # The dsh loop's own children outlive the loop's pid; kill the process group
