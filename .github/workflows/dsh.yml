@@ -1,0 +1,70 @@
+# Start a DeepSeek Harness session by hand, get a temporary link, sign in with
+# a password.
+#
+# Trigger it from the Actions tab ("Run workflow"), or:
+#   gh workflow run dsh.yml -f minutes=60
+#
+# What to expect once it starts:
+#   * the run's Summary shows the link and the password;
+#   * the link opens a sign-in page, and only the password opens the harness;
+#   * the session ends when the job's timeout is reached or you cancel the run.
+#
+# Nothing is persisted between sessions unless S3 inputs are configured —
+# every run starts from a clean workspace.
+name: DeepSeek Harness
+
+on:
+  workflow_dispatch:
+    inputs:
+      minutes:
+        description: How long the session stays up, in minutes.
+        type: number
+        default: 60
+      password:
+        description: Password for the session. Leave empty to have one generated.
+        type: string
+        default: ''
+      model:
+        description: >-
+          Model id for a custom gateway, e.g. deepseek-v4.1-flash. Leave empty to
+          use the official DeepSeek route. Requires the GATEWAY_BASE_URL secret.
+        type: string
+        default: ''
+      ngrok_domain:
+        description: Reserved ngrok domain to serve on, e.g. my-dsh.ngrok.app.
+        type: string
+        default: ''
+      mount_repo:
+        description: Mount this repository read-only at /workspace inside the session.
+        type: boolean
+        default: true
+
+# One session per run; the step itself owns the container's lifecycle.
+permissions:
+  contents: read
+
+concurrency:
+  # A second run would fight the first over the same host ports, so queue them
+  # instead of letting both fail.
+  group: dsh-session-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  dsh:
+    runs-on: ubuntu-latest
+    # The step ends the session at its own timeout; this is the backstop, kept a
+    # few minutes longer so cleanup runs before the runner is reclaimed.
+    timeout-minutes: ${{ fromJSON(inputs.minutes) + 5 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./
+        with:
+          api_key: ${{ secrets.DEEPSEEK_API_KEY }}
+          password: ${{ inputs.password }}
+          ngrok_token: ${{ secrets.NGROK_TOKEN }}
+          ngrok_domain: ${{ inputs.ngrok_domain }}
+          base_url: ${{ inputs.model != '' && secrets.GATEWAY_BASE_URL || '' }}
+          model: ${{ inputs.model }}
+          timeout_minutes: ${{ inputs.minutes }}
+          mount_repo: ${{ inputs.mount_repo }}

@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell syntax
+        run: |
+          set -eux
+          for script in scripts/*.sh; do
+            bash -n "$script"
+          done
+
+      - name: ShellCheck
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq shellcheck
+          shellcheck --severity=warning scripts/*.sh
+
+      - name: Node syntax
+        run: |
+          set -eux
+          node --check scripts/gateway.mjs
+          node --check tests/gateway.e2e.mjs
+
+      - name: YAML parses
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import glob, sys, yaml
+          ok = True
+          for path in ['action.yml', *glob.glob('.github/workflows/*.yml')]:
+              try:
+                  yaml.safe_load(open(path))
+                  print(f'{path}: ok')
+              except Exception as exc:
+                  print(f'{path}: {exc}', file=sys.stderr)
+                  ok = False
+          sys.exit(0 if ok else 1)
+          PY
+
+      - name: action.yml declares what the script reads
+        # The composite action passes every input to action.sh as an environment
+        # variable. A typo here means an input that silently does nothing, which
+        # is exactly the kind of bug a run only reveals an hour later.
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import re, yaml, sys
+          action = yaml.safe_load(open('action.yml'))
+          declared = set(action['inputs'])
+          step = next(s for s in action['runs']['steps'] if 'action.sh' in str(s.get('run', '')))
+          passed = set()
+          for name, value in step['env'].items():
+              m = re.fullmatch(r'\$\{\{\s*inputs\.([a-z0-9_]+)\s*\}\}', str(value))
+              if m:
+                  passed.add(m.group(1))
+          content = open('scripts/action.sh').read()
+          # Every declared input must either reach the script or be consumed by
+          # the workflow's own docker/ngrok arguments.
+          missing = declared - passed
+          if missing:
+              print(f'action.yml inputs never passed to the script: {sorted(missing)}', file=sys.stderr)
+              sys.exit(1)
+          print(f'{len(declared)} inputs declared, all forwarded')
+          PY
+
+  # The gateway is the part with real logic in it (cookie isolation, token
+  # re-minting, the WebSocket relay), so it is tested against a real dsh rather
+  # than a mock. This job is the reason the action can claim any of that works.
+  gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Read the pinned dsh version
+        id: dsh
+        run: |
+          set -eux
+          echo "version=$(grep -oE 'DSH_VERSION=[0-9][^ ]*' .github/dsh-version | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+
+      - name: Install dsh
+        run: |
+          set -eux
+          npm install --global "@deepseek-ai/dsh@${{ steps.dsh.outputs.version }}"
+
+      - name: Start dsh web
+        run: |
+          set -eux
+          mkdir -p /tmp/dsh
+          DSH_HOME=/tmp/dsh dsh --profile web --no-open --port 3099 > /tmp/dsh/boot.log 2>&1 &
+          for _ in $(seq 1 60); do
+            grep -q 'dsh web:' /tmp/dsh/boot.log && break
+            sleep 2
+          done
+          grep 'dsh web:' /tmp/dsh/boot.log
+
+      - name: Start the gateway
+        run: |
+          set -eux
+          DSHGW_INNER_AUTHORITY=127.0.0.1:3099 \
+          DSHGW_PASSWORD=testpass \
+          DSHGW_PUBLIC_URL=https://example.invalid \
+            node scripts/gateway.mjs < /tmp/dsh/boot.log > /tmp/dsh/gateway.log 2>&1 &
+          for _ in $(seq 1 30); do
+            [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3080/__dshgw/health)" = 200 ] && break
+            sleep 1
+          done
+          cat /tmp/dsh/gateway.log
+
+      - name: Gateway end-to-end
+        env:
+          DSH_LOG: /tmp/dsh/boot.log
+        run: node tests/gateway.e2e.mjs
+
+      - name: Gateway log on failure
+        if: failure()
+        run: cat /tmp/dsh/gateway.log || true

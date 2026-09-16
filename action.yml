@@ -1,0 +1,189 @@
+name: 'Run DeepSeek Harness'
+description: >-
+  Start an ephemeral DeepSeek Harness (dsh) web session on the runner and expose
+  it through an ngrok tunnel behind a password. The step keeps the session alive
+  until the job's timeout, then tears it down.
+author: 'shaowenchen'
+
+branding:
+  icon: 'terminal'
+  color: 'blue'
+
+inputs:
+  api_key:
+    description: >-
+      Model API key. Required: the step fails fast without it. For the official
+      DeepSeek route this is a DeepSeek key; with base_url set it is that
+      gateway's key.
+    required: true
+    default: ''
+  password:
+    description: >-
+      Password that guards the session link. Leave empty to have one generated
+      and printed in the job summary — the link alone never grants access.
+    required: false
+    default: ''
+  ngrok_token:
+    description: >-
+      ngrok authtoken (store it as a secret). Without it the session still runs,
+      but it is only reachable from the runner itself.
+    required: false
+    default: ''
+  ngrok_domain:
+    description: >-
+      Reserved ngrok domain to serve on, e.g. my-dsh.ngrok.app. Empty uses an
+      ngrok-assigned random hostname.
+    required: false
+    default: ''
+  timeout_minutes:
+    description: >-
+      How long the session stays up. Keep this below the job's own
+      timeout-minutes so the step ends the session cleanly.
+    required: false
+    default: '60'
+  image:
+    description: Container image to run.
+    required: false
+    default: 'shaowenchen/deepseek-harness-web:latest'
+  port:
+    description: >-
+      Port dsh listens on inside the runner's network namespace. The password
+      gateway takes 3080 and proxies to this port.
+    required: false
+    default: '13080'
+  base_url:
+    description: >-
+      OpenAI-compatible gateway for a custom model route. When set, model is
+      required as well; when both are empty, the official DeepSeek route is used.
+    required: false
+    default: ''
+  model:
+    description: >-
+      Model id(s) for the custom route, comma-separated; the first becomes the
+      default. Required when base_url is set.
+    required: false
+    default: ''
+  workspace_dir:
+    description: Workspace directory pre-created under /root, so the web UI's directory picker has a ready option.
+    required: false
+    default: 'default'
+  mount_repo:
+    description: >-
+      Mount the repository checkout read-only at /workspace, so the session can
+      read the code it was started for.
+    required: false
+    default: 'true'
+  extra_args:
+    description: Extra flags appended to the dsh command line, e.g. '--patch /x.yml'.
+    required: false
+    default: ''
+  extra_docker_args:
+    description: Extra flags appended to docker run, e.g. '--cpus 2 --memory 4g'.
+    required: false
+    default: ''
+  log_level:
+    description: Container log level; 'debug' prints per-file sync details.
+    required: false
+    default: ''
+
+  # Optional S3-compatible persistence. Sync is enabled only when s3_bucket is set.
+  s3_bucket:
+    description: Bucket that persists the workspace and chat history across sessions.
+    required: false
+    default: ''
+  s3_path:
+    description: Sub-path prefix inside the bucket.
+    required: false
+    default: ''
+  s3_endpoint:
+    description: S3 endpoint, e.g. https://ks3-cn-beijing.ksyuncs.com.
+    required: false
+    default: ''
+  s3_access_key:
+    description: S3 access key. Required when s3_bucket is set.
+    required: false
+    default: ''
+  s3_secret_key:
+    description: S3 secret key. Required when s3_bucket is set.
+    required: false
+    default: ''
+  s3_region:
+    description: S3 region, e.g. cn-beijing.
+    required: false
+    default: ''
+  s3_path_style:
+    description: '0 virtual-host style (AWS/Kingsoft), 1 path-style (MinIO/self-hosted).'
+    required: false
+    default: ''
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Validate inputs
+      shell: bash
+      env:
+        DSH_IMAGE: ${{ inputs.image }}
+        DSH_PORT: ${{ inputs.port }}
+        DSH_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
+      run: |
+        set -euo pipefail
+        case "$DSH_TIMEOUT_MINUTES" in
+          ''|*[!0-9]*) echo "::error::timeout_minutes must be a whole number"; exit 1 ;;
+        esac
+        [ "$DSH_TIMEOUT_MINUTES" -ge 1 ] || { echo "::error::timeout_minutes must be at least 1"; exit 1; }
+        case "$DSH_PORT" in
+          ''|*[!0-9]*) echo "::error::port must be a whole number"; exit 1 ;;
+        esac
+        # 3080 belongs to the gateway; dsh runs behind it.
+        [ "$DSH_PORT" != "3080" ] || { echo "::error::port 3080 is reserved for the password gateway; pick another, e.g. 13080"; exit 1; }
+        command -v docker >/dev/null || { echo "::error::docker is not available on this runner"; exit 1; }
+        docker info >/dev/null 2>&1 || { echo "::error::the docker daemon is not reachable on this runner"; exit 1; }
+        docker pull "$DSH_IMAGE" >/dev/null || { echo "::error::could not pull image $DSH_IMAGE"; exit 1; }
+        echo "image $DSH_IMAGE is ready"
+
+    - name: Install ngrok
+      if: inputs.ngrok_token != ''
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Same distribution channel debugger-action uses; the archive is a
+        # single static binary, so no package manager is involved.
+        url="https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz"
+        curl -fsSL "$url" | sudo tar -xz -C /usr/local/bin
+        sudo chmod +x /usr/local/bin/ngrok
+        ngrok --version
+
+    - name: Start the session
+      shell: bash
+      env:
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
+        DSH_IMAGE: ${{ inputs.image }}
+        DSH_PORT: ${{ inputs.port }}
+        DSH_WORKSPACE_DIR: ${{ inputs.workspace_dir }}
+        DSH_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
+        DSH_API_KEY: ${{ inputs.api_key }}
+        DSH_PASSWORD: ${{ inputs.password }}
+        DSH_BASE_URL: ${{ inputs.base_url }}
+        DSH_MODEL: ${{ inputs.model }}
+        DSH_LOG_LEVEL: ${{ inputs.log_level }}
+        DSH_EXTRA_ARGS: ${{ inputs.extra_args }}
+        DSH_EXTRA_DOCKER_ARGS: ${{ inputs.extra_docker_args }}
+        DSH_S3_BUCKET: ${{ inputs.s3_bucket }}
+        DSH_S3_PATH: ${{ inputs.s3_path }}
+        DSH_S3_ENDPOINT: ${{ inputs.s3_endpoint }}
+        DSH_S3_ACCESS_KEY: ${{ inputs.s3_access_key }}
+        DSH_S3_SECRET_KEY: ${{ inputs.s3_secret_key }}
+        DSH_S3_REGION: ${{ inputs.s3_region }}
+        DSH_S3_PATH_STYLE: ${{ inputs.s3_path_style }}
+        NGROK_TOKEN: ${{ inputs.ngrok_token }}
+        NGROK_DOMAIN: ${{ inputs.ngrok_domain }}
+        DSH_MOUNT_REPO: ${{ inputs.mount_repo }}
+      run: |
+        set -euo pipefail
+        if [ "$DSH_MOUNT_REPO" != "true" ]; then
+          # The action script always mounts the checkout; disabling it means
+          # pointing the mount at an empty scratch directory instead.
+          mkdir -p "$RUNNER_TEMP/dsh-no-repo"
+          export GITHUB_WORKSPACE_DIR="$RUNNER_TEMP/dsh-no-repo"
+        fi
+        bash "$GITHUB_ACTION_PATH/scripts/action.sh"

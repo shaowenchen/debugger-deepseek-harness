@@ -1,0 +1,5 @@
+# The dsh version the gateway is tested against and the image pins.
+# deepseek-harness-web pins the same value in its Dockerfile ARG DSH_VERSION;
+# the behaviour this action depends on (authority-bound cookies, the launch
+# token, the /api Host fence) was verified against it. Bump both together.
+DSH_VERSION=0.1.2-rc.1
