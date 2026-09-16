@@ -17,9 +17,17 @@
  *     is written, naming provider `deepseek-official`; the model catalog and
  *     the credential stay dsh's own.
  *   - set — an OpenAI-compatible gateway, declared under `llm-pi-ai` with an
- *     `apiKeyEnv` naming the environment variable the key travels in. Every id
- *     in the comma-separated DSH_MODEL is registered there and the first
- *     becomes the default selection.
+ *     `apiKeyEnv` naming the environment variable the key travels in. Every
+ *     entry in the comma-separated DSH_MODEL is registered there and the first
+ *     becomes the default selection. An entry is `id`, or
+ *     `id|name|contextWindow|maxTokens` with the trailing fields optional —
+ *     see {@link parseModel}, which also explains why the spelling is dsh's own.
+ *
+ * This file must use dsh's real section and field names. A plausible-looking
+ * document under any other spelling (`llm-custom` with `protocol`/`baseUrl`, or
+ * `maxOutput` for `maxTokens`) is read as an empty configuration, and the
+ * session then fails its first turn with `NO_ADAPTER` rather than at startup —
+ * so the mistake surfaces late and looks like a model problem.
  *
  * On the OFFICIAL route the value `default` (or an empty value) is a sentinel
  * meaning "no explicit choice": nothing is written, leaving dsh its own default
@@ -100,15 +108,62 @@ function stripKeys(text) {
 }
 
 /**
- * The model ids to register, in order; the first becomes the default.
+ * Parse one model entry into the fields dsh actually reads.
  *
- * On the official route the sentinel names no model at all. On a custom route
- * it is an ordinary id, so it survives — see {@link isSentinel}.
+ * An entry is `id`, or `id|name|contextWindow|maxTokens` with the trailing
+ * three optional. The names are dsh's own (`maxTokens`, not `maxOutput`; the
+ * section is `llm-pi-ai`, not `llm-custom`), so what this writes needs no
+ * translation — a declaration in any other spelling registers no route at all
+ * and dsh fails the first turn with `NO_ADAPTER`.
+ *
+ * A bar separates the fields because a comma already separates entries and a
+ * model id may contain neither.
+ *
+ * @param entry - one comma-separated segment of DSH_MODEL.
+ * @returns the id plus whatever optional fields were given.
+ * @throws when a capacity is present but is not a positive integer.
  */
-const parseIds = (text) => text.split(',').map((id) => id.trim()).filter((id) => id !== '')
+function parseModel(entry) {
+  const [id, name, contextWindow, maxTokens] = entry.split('|').map((part) => part.trim())
+  if (id === undefined || id === '') throw new Error(`settings: empty model id in DSH_MODEL (entry ${JSON.stringify(entry)})`)
+
+  const capacity = (label, raw) => {
+    if (raw === undefined || raw === '') return undefined
+    // dsh validates these as positive integers; a typo must fail here, where
+    // the message can name the field, rather than as a rejected session.
+    if (!/^\d+$/.test(raw) || Number(raw) < 1) {
+      throw new Error(`settings: ${label} for model ${JSON.stringify(id)} must be a positive integer (got ${JSON.stringify(raw)})`)
+    }
+    return Number(raw)
+  }
+
+  return {
+    id,
+    name: name === undefined || name === '' ? undefined : name,
+    contextWindow: capacity('contextWindow', contextWindow),
+    maxTokens: capacity('maxTokens', maxTokens),
+  }
+}
+
+/** Split a comma-separated list, trimming each field and dropping empties. */
+const splitList = (text) => text.split(',').map((part) => part.trim()).filter((part) => part !== '')
+
+/** Model entries for a custom route, with whatever metadata each one carries. */
+const parseModels = (text) => splitList(text).map(parseModel)
+
+/** Model ids for the official route, which owns its own catalog and metadata. */
+const parseIds = (text) => splitList(text).map((entry) => {
+  const id = entry.split('|')[0].trim()
+  if (id === '') throw new Error(`settings: empty model id in DSH_MODEL (entry ${JSON.stringify(entry)})`)
+  return id
+})
+
+// The official route only needs ids: llm-deepseek owns that route's catalog, so
+// capacity and display metadata there would be redundant at best. The custom
+// route registers models itself, so it takes the full entry.
 const ids = BASE_URL === ''
   ? (isSentinel ? [] : parseIds(MODEL))
-  : parseIds(MODEL)
+  : parseModels(MODEL)
 
 const settingsPath = join(HOME, 'settings.yaml')
 mkdirSync(HOME, { recursive: true })
@@ -146,8 +201,16 @@ ${END}`
   // Declaring reasoningEfforts opts each model into the selectable-thinking UI.
   // The seven levels map to OpenAI-compatible wire spellings; `off` sends no
   // reasoning field, matching the provider-wide default below.
-  const modelBlocks = ids.map((id) => `        - id: ${yaml(id)}
-          reasoningEfforts:
+  //
+  // name/contextWindow/maxTokens are emitted only when the caller gave them, so
+  // an id alone keeps inheriting the route defaults (262144 context, 32768
+  // output) rather than having this action freeze them into the document.
+  const modelBlocks = ids.map((model) => {
+    const lines = [`        - id: ${yaml(model.id)}`]
+    if (model.name !== undefined) lines.push(`          name: ${yaml(model.name)}`)
+    if (model.contextWindow !== undefined) lines.push(`          contextWindow: ${String(model.contextWindow)}`)
+    if (model.maxTokens !== undefined) lines.push(`          maxTokens: ${String(model.maxTokens)}`)
+    lines.push(`          reasoningEfforts:
             off: null
             minimal: minimal_effort
             low: low_effort
@@ -156,7 +219,9 @@ ${END}`
             xhigh: xhigh_effort
             max: max_effort
           compat:
-            supportsReasoningEffort: true`).join('\n')
+            supportsReasoningEffort: true`)
+    return lines.join('\n')
+  }).join('\n')
 
   block = `${BEGIN}
 llm-pi-ai:
@@ -172,9 +237,9 @@ llm-pi-ai:
 ${modelBlocks}
 agent-default-model:
   provider: custom
-  model: ${yaml(ids[0])}
+  model: ${yaml(ids[0].id)}
 ${END}`
-  description = `${ids.length} model(s) at ${BASE_URL}, default ${ids[0]}`
+  description = `${ids.length} model(s) at ${BASE_URL}, default ${ids[0].id}`
 }
 
 const next = block === ''

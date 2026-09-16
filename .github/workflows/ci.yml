@@ -245,6 +245,27 @@ jobs:
             exit 1
           fi
 
+          # A model entry may carry optional metadata in dsh's own field names
+          # (`maxTokens`, not `maxOutput`), and an entry with no metadata must
+          # still inherit the route defaults rather than freezing them.
+          rm -rf /tmp/settings-meta && mkdir -p /tmp/settings-meta
+          DSH_HOME=/tmp/settings-meta DSH_BASE_URL=https://gateway.example/v1 \
+          DSH_MODEL='rich-model|Rich Model|128000|4096,bare-model' \
+            node scripts/settings.mjs
+          grep -q "name: 'Rich Model'" /tmp/settings-meta/settings.yaml
+          grep -q 'contextWindow: 128000' /tmp/settings-meta/settings.yaml
+          grep -q 'maxTokens: 4096' /tmp/settings-meta/settings.yaml
+          test "$(grep -c 'contextWindow:' /tmp/settings-meta/settings.yaml)" = 1
+          test "$(grep -c 'id: ' /tmp/settings-meta/settings.yaml)" = 2
+
+          # A capacity that dsh would refuse must fail here, naming the field,
+          # rather than as a rejected session later.
+          if DSH_HOME=/tmp/settings-meta DSH_BASE_URL=https://gateway.example/v1 \
+               DSH_MODEL='m|N|not-a-number|4096' node scripts/settings.mjs 2>/dev/null; then
+            echo 'a non-numeric contextWindow should have been refused' >&2
+            exit 1
+          fi
+
           # Switching routes must not leave the other route's declaration
           # behind: two `llm-pi-ai` keys would make dsh reject the document.
           DSH_HOME=/tmp/settings-home DSH_BASE_URL='' DSH_MODEL='deepseek-v4-pro' \

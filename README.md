@@ -75,6 +75,25 @@ keeps its own default model rather than this action pinning one. On a custom
 gateway it is an ordinary model id — the gateway is yours, so a model actually
 named `default` works like any other.
 
+### Describing a custom gateway's models
+
+An entry may carry optional metadata, separated by `|`:
+
+```
+model: 'deepseek-v4-flash|DeepSeek V4 Flash (via Gateway)|128000|4096,fast-model'
+```
+
+That is `id|name|contextWindow|maxTokens`, and the last three are optional —
+`fast-model` above is registered with the route's defaults. Declaring a capacity
+matters because a gateway is not a catalog `dsh` knows: without it, every model
+inherits the same defaults (262144 context, 32768 output), which may be far more
+than your gateway really accepts.
+
+The field names are `dsh`'s own (`maxTokens`, not `maxOutput`). A section or
+field spelled any other way — `llm-custom` with `protocol`/`baseUrl`, say — is
+read as an empty configuration, and the session then fails its first turn with
+`NO_ADAPTER`, not at startup. If you see that, check the spelling.
+
 ```yaml
 # one run against a different model, no secret edits:
 gh workflow run dsh.yml -f model=some-other-model
@@ -187,7 +206,7 @@ Two consequences worth knowing:
 | `password` | generated | Password guarding the link |
 | `ngrok_token` | — | ngrok authtoken (**required** for a public link) |
 | `base_url` | — | Model API endpoint; empty = official DeepSeek |
-| `model` | `default` | Model id(s), comma-separated; the first is the default. `default` keeps the endpoint's own default model |
+| `model` | `default` | Model id(s), comma-separated; the first is the default. An id may be `id\|name\|contextWindow\|maxTokens`. `default` keeps the endpoint's own default model |
 | `workspace_dir` | the runner directory | Directory to work in; a name resolves under the session home |
 | `extra_args` | — | Extra flags for the `dsh` command |
 | `log_level` | — | `debug` prints more detail |
