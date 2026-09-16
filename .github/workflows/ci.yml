@@ -33,7 +33,24 @@ jobs:
         run: |
           set -eux
           node --check scripts/gateway.mjs
+          node --check scripts/settings.mjs
           node --check tests/gateway.e2e.mjs
+
+      - name: The dsh home the script writes to is the one dsh reads
+        # dsh resolves its home from $DSH_HOME and otherwise falls back to
+        # `homedir()/.dsh`. action.sh writes settings.yaml and the workspace
+        # registry into that home, so if DSH_HOME is only a shell variable —
+        # reaching the helper commands through an inline VAR=... prefix but never
+        # reaching dsh itself — every write lands somewhere dsh does not read.
+        # The failure is silent: the session starts on the official route with
+        # the configured provider simply absent. Require the export.
+        run: |
+          set -eux
+          grep -qE '^export DSH_HOME=' scripts/action.sh
+          # And nothing may quietly unset or shadow it later.
+          ! grep -qE '^DSH_HOME=' scripts/action.sh
+          # The helpers must read the same variable, not a second copy.
+          grep -q 'DSH_HOME="\$DSH_HOME"' scripts/action.sh
 
       - name: YAML parses
         run: |

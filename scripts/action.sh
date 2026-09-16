@@ -39,7 +39,14 @@ RUNTIME_DIR="$PWD/.dsh-session"
 URL_FILE="$RUNTIME_DIR/url.txt"
 GATEWAY_LOG="$RUNTIME_DIR/gateway.log"
 DSH_LOG="$RUNTIME_DIR/dsh.log"
-DSH_HOME="$DSH_HOME_DIR/.dsh"
+# EXPORTED, and that is load-bearing: dsh resolves its home from $DSH_HOME and
+# otherwise falls back to `homedir()/.dsh`. As a plain shell variable it reached
+# the helpers this script invokes with an inline prefix but never reached dsh
+# itself, so the settings.yaml written below landed in a directory dsh does not
+# read — the session then started on the official route with the custom provider
+# silently absent. Anything this script writes into the dsh home must share the
+# same value dsh will resolve, which means exporting it before dsh starts.
+export DSH_HOME="$DSH_HOME_DIR/.dsh"
 
 # Resolve the workspace to an absolute path once: the input is either a name
 # resolved under the home directory or an absolute path (the default: the
