@@ -16,11 +16,11 @@ set -euo pipefail
 
 : "${DSH_VERSION:=0.1.2-rc.1}"
 : "${DSH_PORT:=13080}"
-# The directory the session works in: the runner's own working directory, so the
-# session starts where the workflow put it (the repository checkout, since the
-# workflow runs `actions/checkout` before this action). An absolute path is used
-# as given; any other value is a name resolved under the session home.
-: "${DSH_WORKSPACE_DIR:=$PWD}"
+# The directory the session works in. The default is a fresh, empty directory of
+# its own under the session home, so a session starts on a clean slate and
+# cannot read or modify this repository by accident. An absolute path is used as
+# given; any other value is a name resolved under the session home.
+: "${DSH_WORKSPACE_DIR:=workspace}"
 : "${DSH_HOME_DIR:=$PWD/.dsh-session-home}"
 : "${DSH_SESSION_HOURS:=6}"
 # No session-length input: the job's own timeout-minutes is the deadline.
@@ -48,9 +48,9 @@ DSH_LOG="$RUNTIME_DIR/dsh.log"
 # same value dsh will resolve, which means exporting it before dsh starts.
 export DSH_HOME="$DSH_HOME_DIR/.dsh"
 
-# Resolve the workspace to an absolute path once: the input is either a name
-# resolved under the home directory or an absolute path (the default: the
-# repository checkout).
+# Resolve the workspace to an absolute path once: a name resolves under the
+# session home (the default, `workspace/`), an absolute path is used as given.
+# The session home is not the repository, so the default directory is empty.
 case "$DSH_WORKSPACE_DIR" in
   /?*) WS_PATH="$DSH_WORKSPACE_DIR" ;;
   *)   WS_PATH="$DSH_HOME_DIR/$DSH_WORKSPACE_DIR" ;;

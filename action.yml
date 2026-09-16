@@ -37,7 +37,7 @@ inputs:
     required: false
     default: 'default'
   workspace_dir:
-    description: 'Directory the session works in; defaults to the runner directory.'
+    description: 'Directory the session works in; defaults to an empty workspace/.'
     required: false
     default: ''
   extra_args:

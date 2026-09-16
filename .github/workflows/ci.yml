@@ -52,6 +52,22 @@ jobs:
           # The helpers must read the same variable, not a second copy.
           grep -q 'DSH_HOME="\$DSH_HOME"' scripts/action.sh
 
+      - name: The session starts in an empty workspace, not the repository
+        # The default workspace must be a directory of the session's own. When it
+        # pointed at $PWD the session opened on the repository checkout, which
+        # let a session read and modify the action that launched it — and made
+        # "what does the session start with" depend on whatever the workflow's
+        # earlier steps happened to leave behind.
+        run: |
+          set -eux
+          # A plain name (resolved under the session home), never $PWD or the
+          # runner's workspace.
+          grep -qE '^: "\$\{DSH_WORKSPACE_DIR:=workspace\}"' scripts/action.sh
+          ! grep -qE '^: "\$\{DSH_WORKSPACE_DIR:=\$PWD' scripts/action.sh
+          # And the name must resolve under the session home, which is what
+          # makes the directory empty rather than a view of the checkout.
+          grep -q 'WS_PATH="\$DSH_HOME_DIR/\$DSH_WORKSPACE_DIR"' scripts/action.sh
+
       - name: YAML parses
         run: |
           set -eux

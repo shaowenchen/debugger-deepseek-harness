@@ -62,6 +62,5 @@ jobs:
           # reads it the same way and leaves dsh its own default model.
           model: ${{ inputs.model == 'default' && secrets.MODEL || inputs.model }}
           ngrok_token: ${{ secrets.NGROK_TOKEN }}
-          # workspace_dir is left to the action's default — the runner's own
-          # working directory, i.e. the repository checkout — so it needs no
-          # form field.
+          # workspace_dir is left to the action's default — a fresh, empty
+          # workspace/ directory — so it needs no form field.

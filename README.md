@@ -132,9 +132,9 @@ To give the session the repository instead, check it out and point at it:
           # …the other inputs as above
 ```
 
-The session starts in the runner's own working directory — whatever the
-workflow's earlier steps left there, which is the checkout if you added one.
-Point `workspace_dir` at another path to work somewhere else, as above.
+The session starts in a fresh, empty `workspace/` directory of its own, so it
+begins with a clean slate — nothing from this repository is in the way. Point
+`workspace_dir` at another path to work somewhere else, as above.
 
 ## Why there is a password gateway
 
@@ -207,7 +207,7 @@ Two consequences worth knowing:
 | `ngrok_token` | — | ngrok authtoken (**required** for a public link) |
 | `base_url` | — | Model API endpoint; empty = official DeepSeek |
 | `model` | `default` | Model id(s), comma-separated; the first is the default. An id may be `id\|name\|contextWindow\|maxTokens`. `default` keeps the endpoint's own default model |
-| `workspace_dir` | the runner directory | Directory to work in; a name resolves under the session home |
+| `workspace_dir` | empty `workspace/` | Directory to work in; a name resolves under the session home |
 | `extra_args` | — | Extra flags for the `dsh` command |
 | `log_level` | — | `debug` prints more detail |
 
@@ -241,10 +241,10 @@ Two consequences worth knowing:
 - **One session at a time per repository** — both sessions would claim the same
   gateway port, so the workflow keys its `concurrency` group to the repository
   and a second run queues.
-- **The session starts where the runner put it.** The workspace is the runner's
-  own working directory — the repository checkout if the workflow ran
-  `actions/checkout` first, and empty otherwise. Point `workspace_dir` at
-  another path to work somewhere else.
+- **The session starts empty.** It gets a fresh `workspace/` directory of its
+  own, not a copy of this repository, so it cannot read or modify the action
+  that launched it. Point `workspace_dir` at an absolute path to work on code
+  that is already on the runner.
 - **Nothing survives the run.** The runner is discarded with the job, and there
   is no S3 sync outside the image.
 
