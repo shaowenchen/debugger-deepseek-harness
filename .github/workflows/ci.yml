@@ -68,13 +68,34 @@ jobs:
               if m:
                   passed.add(m.group(1))
           content = open('scripts/action.sh').read()
-          # Every declared input must either reach the script or be consumed by
-          # the workflow's own docker/ngrok arguments.
+          # Every declared input must reach the script, or be consumed by the
+          # action's own steps (e.g. setup-node) instead.
           missing = declared - passed
           if missing:
               print(f'action.yml inputs never passed to the script: {sorted(missing)}', file=sys.stderr)
               sys.exit(1)
           print(f'{len(declared)} inputs declared, all forwarded')
+          PY
+
+      - name: The version dropdown matches what CI tests
+        # The e2e job runs a matrix of dsh versions; this keeps that matrix and
+        # the dropdown users pick from in step, so adding an option without
+        # testing it (or the reverse) fails here instead of in someone's run.
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import sys, yaml
+          # PyYAML reads the bare key `on:` as the boolean True (YAML 1.1), so
+          # the dispatch inputs live under True, not under the string 'on'.
+          def on_block(doc):
+              return doc.get('on', doc.get(True))
+          offer = set(on_block(yaml.safe_load(open('.github/workflows/dsh.yml')))['workflow_dispatch']['inputs']['version']['options'])
+          ci = yaml.safe_load(open('.github/workflows/ci.yml'))
+          tested = set(ci['jobs']['gateway']['strategy']['matrix']['dsh'])
+          if offer != tested:
+              print(f'version options {sorted(offer)} != CI e2e matrix {sorted(tested)}', file=sys.stderr)
+              sys.exit(1)
+          print(f'version dropdown and CI matrix agree: {sorted(offer)}')
           PY
 
       - name: Workflow contexts are legal for the keys that use them
@@ -144,7 +165,15 @@ jobs:
   # than a mock. This job is the reason the action can claim any of that works.
   gateway:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # Every version the workflow offers in its dropdown. Testing only the
+        # default would let `latest` rot: the gateway depends on dsh internals
+        # (the launch token, the authority-bound cookie, the /api Host fence),
+        # and a new dsh could change any of them without this repo being touched.
+        dsh: ['0.1.2-rc.1', 'latest']
     steps:
       - uses: actions/checkout@v4
 
@@ -152,16 +181,37 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Read the pinned dsh version
-        id: dsh
-        run: |
-          set -eux
-          echo "version=$(grep -oE 'DSH_VERSION=[0-9][^ ]*' .github/dsh-version | cut -d= -f2)" >> "$GITHUB_OUTPUT"
-
       - name: Install dsh
         run: |
           set -eux
-          npm install --global "@deepseek-ai/dsh@${{ steps.dsh.outputs.version }}"
+          npm install --global "@deepseek-ai/dsh@${{ matrix.dsh }}"
+          echo "dsh $(dsh --version 2>/dev/null || echo "${{ matrix.dsh }}")"
+
+      - name: settings.mjs writes what dsh accepts
+        # A settings.yaml dsh rejects stops the session from ever starting, and
+        # a second declaration of the same top-level key is the failure mode a
+        # re-run produces — so check both, and that dsh boots with the result.
+        run: |
+          set -eux
+          rm -rf /tmp/settings-home && mkdir -p /tmp/settings-home
+          DSH_HOME=/tmp/settings-home \
+          DSH_BASE_URL=https://gateway.example/v1 \
+          DSH_MODEL='model-a,model-b' DSH_API_KEY=sk-test \
+            node scripts/settings.mjs
+          # Twice, to prove the managed block is replaced rather than appended.
+          DSH_HOME=/tmp/settings-home \
+          DSH_BASE_URL=https://gateway.example/v1 \
+          DSH_MODEL='model-a,model-b' DSH_API_KEY=sk-test \
+            node scripts/settings.mjs
+          test "$(grep -c '^llm-pi-ai:' /tmp/settings-home/settings.yaml)" = 1
+          test "$(grep -c '^agent-default-model:' /tmp/settings-home/settings.yaml)" = 1
+          DSH_HOME=/tmp/settings-home DEEPSEEK_API_KEY=sk-test \
+            timeout 90 dsh --profile web --no-open --port 3098 > /tmp/settings-home/boot.log 2>&1 &
+          for _ in $(seq 1 45); do
+            grep -q 'dsh web:' /tmp/settings-home/boot.log && break
+            sleep 2
+          done
+          grep 'dsh web:' /tmp/settings-home/boot.log
 
       - name: Start dsh web
         run: |

@@ -13,6 +13,17 @@ on:
       # run is just pressing the button. None of these is a credential — the API
       # key and password are secrets only, because a workflow input is plain
       # text any reader of the run can see.
+      version:
+        description: 'dsh version to install.'
+        type: choice
+        default: '0.1.2-rc.1'
+        options:
+          # The published dsh-web image pins 0.1.2-rc.1, so this runs the same
+          # dsh as that image.
+          - '0.1.2-rc.1'
+          # Resolves npm's `latest` tag at install time, so it never goes stale
+          # the way a hard-coded version number would.
+          - 'latest'
       base_url:
         description: 'Gateway address. Empty -> BASE_URL secret.'
         type: string
@@ -25,12 +36,8 @@ on:
         description: 'Reserved ngrok domain. Empty -> NGROK_DOMAIN secret.'
         type: string
         default: ''
-      repo:
-        description: 'Workspace name. Empty -> "default".'
-        type: string
-        default: ''
-      mount:
-        description: 'Mount the checkout at /workspace. Empty -> true.'
+      workspace:
+        description: 'Absolute path to work in. Empty -> the repository checkout.'
         type: string
         default: ''
 
@@ -38,9 +45,8 @@ permissions:
   contents: read
 
 concurrency:
-  # Keyed by workspace name, so parallel sessions queue instead of colliding on
-  # the same host ports.
-  group: dsh-${{ inputs.repo || 'default' }}
+  # Sessions collide on the fixed gateway port, so only one runs per repository.
+  group: dsh-${{ github.repository }}
   cancel-in-progress: false
 
 jobs:
@@ -56,10 +62,13 @@ jobs:
           # Credentials: secrets only, never inputs.
           api_key: ${{ secrets.API_KEY }}
           password: ${{ secrets.PASSWORD }}
-          # Input when filled, else the secret of the same name.
+          # Input when filled, else the secret of the same name. `version` has no
+          # secret: it is a choice list with a default, so it is always set.
+          version: ${{ inputs.version }}
           base_url: ${{ inputs.base_url || secrets.BASE_URL }}
           model: ${{ inputs.model || secrets.MODEL }}
           ngrok_token: ${{ secrets.NGROK_TOKEN }}
           ngrok_domain: ${{ inputs.ngrok_domain || secrets.NGROK_DOMAIN }}
-          workspace_dir: ${{ inputs.repo }}
-          mount_repo: ${{ inputs.mount }}
+          # Empty means the repository checkout, which is what actions/checkout
+          # above already produced — there is no container to mount into.
+          workspace_dir: ${{ inputs.workspace }}

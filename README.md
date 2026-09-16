@@ -9,8 +9,8 @@ It combines two projects:
   "give me a disposable box to poke at from a workflow run" idea, and its ngrok
   tunnel setup.
 - **[deepseek-harness-web](https://github.com/shaowenchen/deepseek-harness-web)** —
-  the single-container `dsh` web image with model routing and optional S3
-  persistence.
+  the packaged `dsh` web image, whose pinned dsh version is this action's
+  default and whose model-routing conventions it follows.
 
 What you get: a run that prints something like
 
@@ -54,8 +54,8 @@ is nothing to set up first.
 
 The session ends when you hit **Cancel workflow**, or when the job's
 `timeout-minutes` fires — there is no "duration" knob to set, because the job
-timeout already is one. Nothing survives the end of the run unless you configure
-S3 (below) — each session starts from a clean workspace.
+timeout already is one. Nothing survives the end of the run; the runner is
+discarded with the job.
 
 ## Model routing
 
@@ -100,9 +100,9 @@ jobs:
           model: ${{ secrets.MODEL }}         # omit with base_url
 ```
 
-The checkout is mounted read-only at `/workspace` inside the session, so the
-agent can read the code you started it for. Set `mount_repo: false` to leave it
-out.
+The session works in the repository checkout — `actions/checkout` already put
+the code there — so the agent can read what it was started for. Point
+`workspace_dir` at another absolute path to change that.
 
 ## Why there is a password gateway
 
@@ -134,55 +134,63 @@ browser ──https(tunnel)──▶ gateway ──http(loopback)──▶ dsh
 
 The gateway strips every `dsh-auth-*` cookie out of browser traffic, keeps
 `dsh`'s own cookie to itself, and re-mints it from the launch token it reads off
-the container log whenever `dsh` restarts. The browser only ever holds the
-gateway's own signed session cookie — so the link in the job log is safe to
-share with anyone who also has the password, and a `dsh` restart behind the
-scenes does not log you out.
+dsh's log whenever `dsh` restarts. The browser only ever holds the gateway's own
+signed session cookie — so the link in the job log is safe to share with anyone
+who also has the password, and a `dsh` restart behind the scenes does not log
+you out.
 
 WebSocket traffic (`/api/remote.mux`, the RPC mux) is proxied too, which is why
 the UI is actually live rather than just rendering.
 
-The container runs with `--network host`, so `dsh` listens on the runner's
-loopback only. The tunnel is the only way in.
+`dsh` listens on the runner's loopback only, and the tunnel is the only way in.
+It refuses `--host 0.0.0.0` on purpose; it does not need it here, because the
+gateway reaches it over loopback on the same machine.
+
+## dsh runs natively, not in a container
+
+`dsh` is installed with `npm` on the runner and run directly, so the version is
+chosen per run and no image is involved. That is also why the session works in
+the repository checkout: `actions/checkout` already put the code on the runner,
+so there is nothing to mount.
+
+Two consequences worth knowing:
+
+- **The version dropdown.** `0.1.2-rc.1` matches the pin in
+  deepseek-harness-web's image, so a session here runs the same `dsh` as that
+  image. `latest` resolves npm's `latest` tag at install time, so it never goes
+  stale — CI runs the gateway end-to-end suite against **both** options, because
+  the gateway depends on dsh internals (the launch token, the authority-bound
+  cookie, the `/api` Host fence) that a new release could change.
+- **No S3 persistence.** The image's S3 sync daemon does not exist here; a
+  session is gone when the run ends. Use the image (or a resumed
+  `DSH_HOME`) if you need a workspace that outlives the run.
 
 ## Inputs
 
 | Input | Default | Description |
 |---|---|---|
 | `api_key` | — | Model API key (**required**) |
+| `version` | `0.1.2-rc.1` | dsh version to install; `latest` or the pinned release |
 | `password` | generated | Password guarding the link |
 | `ngrok_token` | — | ngrok authtoken (**required** for a public link) |
 | `ngrok_domain` | — | Reserved ngrok domain, e.g. `my-dsh.ngrok.app` |
 | `base_url` | — | Custom gateway base URL; set together with `model` |
 | `model` | — | Model id(s), comma-separated; the first is the default |
-| `timeout_minutes` | `360` | Safety bound; the **job's** `timeout-minutes` is the real deadline |
-| `image` | `shaowenchen/deepseek-harness-web:latest` | Container image |
-| `port` | `13080` | Port `dsh` listens on (3080 belongs to the gateway) |
-| `workspace_dir` | `default` | Workspace directory under `/root` |
-| `mount_repo` | `true` | Mount the checkout read-only at `/workspace` |
+| `workspace_dir` | — | Directory to work in; empty = the repository checkout |
 | `extra_args` | — | Extra flags for the `dsh` command |
-| `extra_docker_args` | — | Extra flags for `docker run` |
-| `log_level` | — | `debug` prints per-file sync details |
-| `s3_bucket`, `s3_path`, `s3_endpoint`, `s3_access_key`, `s3_secret_key`, `s3_region`, `s3_path_style` | — | Optional S3-compatible persistence |
-
-### Keeping a workspace between sessions
-
-Set the `s3_*` inputs (or the matching `S3_*` secrets) and the workspace and
-chat history sync to the bucket, so the next session picks up where the last one
-stopped. Sync is enabled only when `s3_bucket` is set; then `s3_endpoint`,
-`s3_access_key` and `s3_secret_key` are required. See the
-[deepseek-harness-web README](https://github.com/shaowenchen/deepseek-harness-web)
-for what is and is not synced.
+| `log_level` | — | `debug` prints more detail |
 
 ## Repository layout
 
 | Path | What it is |
 |---|---|
 | `action.yml` | The composite action |
-| `scripts/action.sh` | Orchestration: container, gateway, tunnel, session lifetime |
+| `scripts/action.sh` | Orchestration: install dsh, run it, gateway, tunnel, session lifetime |
 | `scripts/gateway.mjs` | Password gate and reverse proxy (zero dependencies) |
+| `scripts/settings.mjs` | Writes the custom-gateway block into `$DSH_HOME/settings.yaml` |
 | `scripts/session-summary.sh` | Publishes the link and password to the job summary |
 | `.github/workflows/dsh.yml` | The `workflow_dispatch` entry point for this repo |
+| `.github/workflows/ci.yml` | Lint + the gateway end-to-end suite, on every offered dsh version |
 
 ## Notes and limits
 
@@ -190,21 +198,22 @@ for what is and is not synced.
   session is reachable by anyone with the link *and* the password. ngrok's free
   tier also shows an interstitial warning page before the harness loads.
 - **The password is printed in the log.** That is the deliverable — treat the
-  run log the way you would treat the link. Set the `password` input to control
+  run log the way you would treat the link. Set the `password` secret to control
   it, or to reuse a known value.
 - **The generated password is not masked** in the log, deliberately: masking it
   would hide it from the very job summary that has to display it. The API key
-  and S3 credentials *are* masked.
+  *is* masked.
 - **There is no duration input.** A session lives until you cancel the run or
   the job's `timeout-minutes` fires, which is the same thing GitHub already
   measures. Set `timeout-minutes` on the job (60 by default in this repo's
-  workflow) and leave `timeout_minutes` alone.
-- **One session per workspace label** — the workflow keys its `concurrency`
-  group on `repo_label`, so a second run for the same workspace queues rather
-  than fighting the first over the same host ports.
-- **The workspace is ephemeral.** Without S3, everything is gone when the run
-  ends. The container's `/root` lives in `.dsh-session-home/` on the runner, and
-  the runner itself is discarded with the job.
+  workflow).
+- **One session at a time per repository** — both sessions would claim the same
+  gateway port, so the workflow keys its `concurrency` group to the repository
+  and a second run queues.
+- **The session works in the checkout**, so the agent can read the code it was
+  started for. Point `workspace_dir` at another absolute path to change that.
+- **Nothing survives the run.** The runner is discarded with the job, and there
+  is no S3 sync outside the image.
 
 ## License
 

@@ -13,6 +13,10 @@ inputs:
     description: 'Model API key. Required.'
     required: true
     default: ''
+  version:
+    description: 'dsh version to install from npm.'
+    required: false
+    default: '0.1.2-rc.1'
   password:
     description: 'Password for the session link. Empty generates one.'
     required: false
@@ -25,14 +29,6 @@ inputs:
     description: 'Reserved ngrok domain, e.g. my-dsh.ngrok.app.'
     required: false
     default: ''
-  image:
-    description: 'Container image.'
-    required: false
-    default: 'shaowenchen/deepseek-harness-web:latest'
-  port:
-    description: 'Port dsh listens on. The gateway takes 3080.'
-    required: false
-    default: '13080'
   base_url:
     description: 'Gateway address. Set together with model; both empty = official DeepSeek.'
     required: false
@@ -42,85 +38,44 @@ inputs:
     required: false
     default: ''
   workspace_dir:
-    description: 'Workspace directory under /root.'
+    description: 'Directory the session works in. Empty = the repository checkout.'
     required: false
-    default: 'default'
-  mount_repo:
-    description: 'Mount the checkout read-only at /workspace.'
-    required: false
-    default: 'true'
+    default: ''
   extra_args:
     description: "Extra dsh flags, e.g. '--patch /x.yml'."
     required: false
     default: ''
-  extra_docker_args:
-    description: "Extra docker run flags, e.g. '--cpus 2 --memory 4g'."
-    required: false
-    default: ''
   log_level:
-    description: "Container log level; 'debug' is verbose."
-    required: false
-    default: ''
-
-  # Optional S3-compatible persistence. Sync is enabled only when s3_bucket is set.
-  s3_bucket:
-    description: 'Bucket persisting the workspace and chat history.'
-    required: false
-    default: ''
-  s3_path:
-    description: 'Sub-path prefix in the bucket.'
-    required: false
-    default: ''
-  s3_endpoint:
-    description: 'S3 endpoint URL.'
-    required: false
-    default: ''
-  s3_access_key:
-    description: 'S3 access key.'
-    required: false
-    default: ''
-  s3_secret_key:
-    description: 'S3 secret key.'
-    required: false
-    default: ''
-  s3_region:
-    description: 'S3 region, e.g. cn-beijing.'
-    required: false
-    default: ''
-  s3_path_style:
-    description: '0 virtual-host style (AWS), 1 path-style (MinIO).'
+    description: "Log level; 'debug' is verbose."
     required: false
     default: ''
 
 runs:
   using: 'composite'
   steps:
+    # dsh needs a current Node (its bundles use APIs the runner's default Node
+    # lacks — the image it replaced shipped Node 24 for the same reason).
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '24'
+
     - name: Validate inputs
       shell: bash
       env:
-        DSH_IMAGE: ${{ inputs.image }}
-        DSH_PORT: ${{ inputs.port }}
+        DSH_VERSION: ${{ inputs.version }}
         DSH_BASE_URL: ${{ inputs.base_url }}
         DSH_MODEL: ${{ inputs.model }}
       run: |
         set -euo pipefail
-        case "$DSH_PORT" in
-          ''|*[!0-9]*) echo "::error::port must be a whole number"; exit 1 ;;
-        esac
-        # 3080 belongs to the gateway; dsh runs behind it.
-        [ "$DSH_PORT" != "3080" ] || { echo "::error::port 3080 is reserved for the password gateway; pick another, e.g. 13080"; exit 1; }
+        [ -n "$DSH_VERSION" ] || { echo "::error::version is required"; exit 1; }
         # base_url and model must agree: both for a custom gateway, neither for
         # the official DeepSeek route.
-        if [ -n "${DSH_BASE_URL:-}" ] && [ -z "${DSH_MODEL:-}" ]; then
+        if [ -n "$DSH_BASE_URL" ] && [ -z "$DSH_MODEL" ]; then
           echo "::error::base_url is set without model" ; exit 1
         fi
-        if [ -n "${DSH_MODEL:-}" ] && [ -z "${DSH_BASE_URL:-}" ]; then
+        if [ -n "$DSH_MODEL" ] && [ -z "$DSH_BASE_URL" ]; then
           echo "::error::model is set without base_url" ; exit 1
         fi
-        command -v docker >/dev/null || { echo "::error::docker is not available on this runner"; exit 1; }
-        docker info >/dev/null 2>&1 || { echo "::error::the docker daemon is not reachable on this runner"; exit 1; }
-        docker pull "$DSH_IMAGE" >/dev/null || { echo "::error::could not pull image $DSH_IMAGE"; exit 1; }
-        echo "image $DSH_IMAGE is ready"
 
     - name: Install ngrok
       if: inputs.ngrok_token != ''
@@ -137,32 +92,14 @@ runs:
       shell: bash
       env:
         GITHUB_ACTION_PATH: ${{ github.action_path }}
-        DSH_IMAGE: ${{ inputs.image }}
-        DSH_PORT: ${{ inputs.port }}
-        DSH_WORKSPACE_DIR: ${{ inputs.workspace_dir }}
+        DSH_VERSION: ${{ inputs.version }}
         DSH_API_KEY: ${{ inputs.api_key }}
         DSH_PASSWORD: ${{ inputs.password }}
         DSH_BASE_URL: ${{ inputs.base_url }}
         DSH_MODEL: ${{ inputs.model }}
+        DSH_WORKSPACE_DIR: ${{ inputs.workspace_dir }}
         DSH_LOG_LEVEL: ${{ inputs.log_level }}
         DSH_EXTRA_ARGS: ${{ inputs.extra_args }}
-        DSH_EXTRA_DOCKER_ARGS: ${{ inputs.extra_docker_args }}
-        DSH_S3_BUCKET: ${{ inputs.s3_bucket }}
-        DSH_S3_PATH: ${{ inputs.s3_path }}
-        DSH_S3_ENDPOINT: ${{ inputs.s3_endpoint }}
-        DSH_S3_ACCESS_KEY: ${{ inputs.s3_access_key }}
-        DSH_S3_SECRET_KEY: ${{ inputs.s3_secret_key }}
-        DSH_S3_REGION: ${{ inputs.s3_region }}
-        DSH_S3_PATH_STYLE: ${{ inputs.s3_path_style }}
         NGROK_TOKEN: ${{ inputs.ngrok_token }}
         NGROK_DOMAIN: ${{ inputs.ngrok_domain }}
-        DSH_MOUNT_REPO: ${{ inputs.mount_repo }}
-      run: |
-        set -euo pipefail
-        # Only an explicit "false" disables the mount: empty means unset, and
-        # testing for "!= true" would stop mounting for blank callers.
-        if [ "$DSH_MOUNT_REPO" = "false" ]; then
-          mkdir -p "$RUNNER_TEMP/dsh-no-repo"
-          export GITHUB_WORKSPACE_DIR="$RUNNER_TEMP/dsh-no-repo"
-        fi
-        bash "$GITHUB_ACTION_PATH/scripts/action.sh"
+      run: bash "$GITHUB_ACTION_PATH/scripts/action.sh"
