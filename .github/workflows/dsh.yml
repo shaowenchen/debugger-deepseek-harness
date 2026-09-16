@@ -40,7 +40,7 @@ on:
         type: string
         default: ''
       repo:
-        description: 'Workspace name. Empty -> the REPO variable, else "default".'
+        description: 'Workspace name. Empty -> "default". Also namespaces parallel sessions.'
         type: string
         default: ''
       mount:
@@ -52,12 +52,11 @@ permissions:
   contents: read
 
 concurrency:
-  # `concurrency` may read only github/inputs/vars — NOT secrets, which would
-  # fail the whole workflow at parse time. That is why the workspace name's
-  # persisted default is the REPO *variable*: a secret could not be read here,
-  # and using a different source here than for workspace_dir would put two
-  # different workspaces in one queue group.
-  group: dsh-${{ inputs.repo || vars.REPO || 'default' }}
+  # One source for the workspace name — this input — so the queue group and the
+  # workspace directory can never disagree. `concurrency` may read only
+  # github/inputs/vars (a secret here fails the workflow at parse time), and
+  # this reads just the input.
+  group: dsh-${{ inputs.repo || 'default' }}
   cancel-in-progress: false
 
 jobs:
@@ -75,10 +74,10 @@ jobs:
           api_key: ${{ secrets.API_KEY }}
           password: ${{ secrets.PASSWORD }}
           # Everything below: the run's input when filled, else the secret.
-          # `repo` reads the REPO variable to match the concurrency group above.
+          # `repo` and `mount` are input-only — neither is a credential.
           base_url: ${{ inputs.base_url || secrets.BASE_URL }}
           model: ${{ inputs.model || secrets.MODEL }}
           ngrok_token: ${{ secrets.NGROK_TOKEN }}
           ngrok_domain: ${{ inputs.ngrok_domain || secrets.NGROK_DOMAIN }}
-          workspace_dir: ${{ inputs.repo || vars.REPO }}
+          workspace_dir: ${{ inputs.repo }}
           mount_repo: ${{ inputs.mount }}

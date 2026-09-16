@@ -45,17 +45,6 @@ not credentials.
 
 Create them under **Settings → Secrets and variables → Actions → Secrets**.
 
-### One value that is a variable, not a secret
-
-| Variable | Required | Used when | What it is |
-|---|---|---|---|
-| `REPO` | no | the `repo` field is empty | Workspace name, so parallel sessions do not share a directory |
-
-It is a **variable** rather than a secret because the `concurrency` group has to
-read it, and GitHub allows only `github`, `inputs`, and `vars` there — referencing
-a secret in `concurrency` fails the whole workflow at parse time. Put it under
-the **Variables** tab. If you never run two sessions at once, skip it.
-
 ## Quick start
 
 Add `API_KEY`, `PASSWORD`, and `NGROK_TOKEN`. Then: **Actions → DeepSeek
