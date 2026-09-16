@@ -35,13 +35,6 @@ inputs:
       ngrok-assigned random hostname.
     required: false
     default: ''
-  timeout_minutes:
-    description: >-
-      Safety bound on how long the action waits before tearing the session
-      down, in minutes. The job's own timeout-minutes is the real deadline;
-      set this at or above it, and the job's cancellation ends the session.
-    required: false
-    default: '360'
   image:
     description: Container image to run.
     required: false
@@ -125,15 +118,10 @@ runs:
       env:
         DSH_IMAGE: ${{ inputs.image }}
         DSH_PORT: ${{ inputs.port }}
-        DSH_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
         DSH_BASE_URL: ${{ inputs.base_url }}
         DSH_MODEL: ${{ inputs.model }}
       run: |
         set -euo pipefail
-        case "$DSH_TIMEOUT_MINUTES" in
-          ''|*[!0-9]*) echo "::error::timeout_minutes must be a whole number"; exit 1 ;;
-        esac
-        [ "$DSH_TIMEOUT_MINUTES" -ge 1 ] || { echo "::error::timeout_minutes must be at least 1"; exit 1; }
         case "$DSH_PORT" in
           ''|*[!0-9]*) echo "::error::port must be a whole number"; exit 1 ;;
         esac
@@ -173,7 +161,6 @@ runs:
         DSH_IMAGE: ${{ inputs.image }}
         DSH_PORT: ${{ inputs.port }}
         DSH_WORKSPACE_DIR: ${{ inputs.workspace_dir }}
-        DSH_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
         DSH_API_KEY: ${{ inputs.api_key }}
         DSH_PASSWORD: ${{ inputs.password }}
         DSH_BASE_URL: ${{ inputs.base_url }}

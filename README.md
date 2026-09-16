@@ -23,20 +23,17 @@ from anywhere.
 
 ## Quick start
 
-Add the secrets your route needs, then run the workflow.
+Add three secrets, run the workflow, sign in. That's the whole loop.
 
 | Secret | Required | What it is |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | yes | Your model API key |
+| `API_KEY` | yes | Your model API key |
+| `PASSWORD` | yes | The password you sign in with |
 | `NGROK_TOKEN` | yes for a public link | An [ngrok authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) |
-| `GATEWAY_BASE_URL` | for a custom gateway | An OpenAI-compatible base URL, e.g. `https://gateway.example/v1` |
 
-Optional, if you want a default model without typing it on every run, add it as a
-**repository variable** (Settings → Secrets and variables → Actions → Variables →
-`DEFAULT_MODEL`).
-
-Then: **Actions → DeepSeek Harness → Run workflow**. The run's **Summary** shows
-the link and the password. Leave `password` empty and one is generated for you.
+Then: **Actions → DeepSeek Harness → Run workflow**. Open the link from the
+run's **Summary**, type your password, and start working — the session opens on
+a ready workspace, so there is nothing to set up first.
 
 The session ends when you hit **Cancel workflow**, or when the job's
 `timeout-minutes` fires — there is no "duration" knob to set, because the job
@@ -50,22 +47,33 @@ Three values decide which model answers, and they map one-to-one onto what
 
 | | Where it comes from | Notes |
 |---|---|---|
-| **Base URL** | `GATEWAY_BASE_URL` secret, overridable per run by the `base_url` input | Empty = the official DeepSeek endpoint |
-| **Model** | `DEFAULT_MODEL` variable, overridable per run by the `model` input | Comma-separated for several; the first is the default |
-| **API key** | `DEEPSEEK_API_KEY` secret, and nothing else | Never an input — workflow inputs are plain text in the run |
+| **Base URL** | `BASE_URL` in the workflow's `env:` block | Empty = the official DeepSeek endpoint |
+| **Model** | `MODEL` in the same block | Comma-separated for several; the first is the default |
+| **API key** | the `API_KEY` secret, and nothing else | Never an input — workflow inputs are plain text in the run |
 
-Base URL and model must agree: set both for a custom gateway, or neither for the
-official route. The action fails fast with a clear message if only one is set.
-
-The two routing values are *also* offered as dispatch inputs purely so you can
-switch models from the Run-workflow form without editing secrets. They are safe
-there — a gateway address and a model id are not credentials — but be aware that
-workflow inputs are visible as plain text to anyone who can see the run, which
-is exactly why the API key is not one of them.
+To point at your own gateway, edit the two lines near the top of
+`.github/workflows/dsh.yml`:
 
 ```yaml
-# one run against a different model, no secret edits:
-gh workflow run dsh.yml -f model=deepseek-chat,deepseek-reasoner
+env:
+  BASE_URL: https://gateway.example/v1
+  MODEL: your-model-id
+```
+
+Leave both empty to use the official DeepSeek endpoint, where `API_KEY` is your
+DeepSeek key. Setting only one is an error the action reports before it starts
+anything, rather than letting `dsh` fail later on a half-configured route.
+
+Both are stored in the workflow file rather than as secrets, so a normal run
+needs no typing. The Run-workflow form offers `base_url` and `model` overrides
+for a single run — useful for trying another model without editing the file.
+Those overrides are safe to put in an input precisely because an address and a
+model id are not credentials; the API key and password are secrets for exactly
+that reason.
+
+```yaml
+# one run against a different model, no file edits:
+gh workflow run dsh.yml -f model=some-other-model
 ```
 
 ## Using it from another repository

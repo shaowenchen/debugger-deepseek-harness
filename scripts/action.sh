@@ -149,6 +149,68 @@ if [ -n "$DSH_EXTRA_ARGS" ]; then
   docker_args+=("${extra_dsh_args[@]}")
 fi
 
+# ── 3b. seed the workspace, so signing in lands on a usable session ─────────
+#
+# A fresh dsh starts with an EMPTY workspace registry (verified: the boot
+# writes storages/workspace.json with `workspaceIds: []`), which puts the web
+# UI's directory picker between the password and the first prompt. Seeding the
+# registry with the workspace directory removes that step: the UI comes up
+# already inside a workspace, and the user can type immediately.
+#
+# dsh owns this file and rewrites it freely — a seed is only ever needed when
+# the file is absent or has no workspaces, so an existing registry (a resumed
+# S3-backed home, a second boot) is left untouched.
+seed_workspace() {
+  local ws_path="/root/${DSH_WORKSPACE_DIR}"
+  local store="$DSH_HOME_DIR/.dsh/storages/workspace.json"
+  local ws_id workspace_json
+
+  # Parsed as JSON rather than pattern-matched: dsh writes this file
+  # pretty-printed, so the array's contents sit on their own lines and a
+  # single-line grep for `"workspaceIds": [...]` never matches. A re-seed would
+  # silently hand the UI a second, empty workspace and lose the first one.
+  if [ -f "$store" ] && node -e '
+    const fs = require("node:fs")
+    let d
+    try { d = JSON.parse(fs.readFileSync(process.argv[1], "utf8")) } catch { process.exit(1) }
+    process.exit((d?.global?.workspaceIds ?? []).length > 0 ? 0 : 1)
+  ' "$store" 2>/dev/null; then
+    log "existing dsh home already has a workspace; leaving it alone"
+    return 0
+  fi
+
+  # dsh only canonicalizes paths that exist, and refuses a workspace whose
+  # directory is missing, so the directory is created here rather than left to
+  # the container's own first-boot seeding.
+  mkdir -p "$DSH_HOME_DIR/${DSH_WORKSPACE_DIR}"
+  mkdir -p "$DSH_HOME_DIR/.dsh/storages"
+
+  ws_id=$(node -e 'console.log(crypto.randomUUID())')
+  workspace_json=$(ws_id="$ws_id" ws_path="$ws_path" node -e '
+    const now = new Date().toISOString()
+    process.stdout.write(JSON.stringify({
+      unit: { name: "workspace", version: 2 },
+      global: { initialized: true, workspaceIds: [process.env.ws_id], archivedSessionIds: [] },
+      tables: {
+        workspaces: {
+          [process.env.ws_id]: {
+            path: process.env.ws_path,
+            title: process.env.ws_path.split("/").filter(Boolean).pop() ?? process.env.ws_path,
+            sessionIds: [],
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+      },
+    }, null, 2) + "\n")
+  ') || { warn "could not build the workspace seed; the UI will show its directory picker"; return 0; }
+
+  printf '%s' "$workspace_json" > "$store"
+  log "seeded the workspace at ${ws_path} (no directory picker on first load)"
+}
+
+seed_workspace
+
 docker "${docker_args[@]}" >/dev/null || die "docker run failed"
 
 # ── 4. the password gateway ─────────────────────────────────────────────────
