@@ -25,12 +25,8 @@ inputs:
     description: 'ngrok authtoken.'
     required: false
     default: ''
-  ngrok_domain:
-    description: 'Reserved ngrok domain, e.g. my-dsh.ngrok.app.'
-    required: false
-    default: ''
   base_url:
-    description: 'Gateway address.'
+    description: 'Model API endpoint, e.g. https://gateway.example/v1.'
     required: false
     default: ''
   model:
@@ -101,5 +97,4 @@ runs:
         DSH_LOG_LEVEL: ${{ inputs.log_level }}
         DSH_EXTRA_ARGS: ${{ inputs.extra_args }}
         NGROK_TOKEN: ${{ inputs.ngrok_token }}
-        NGROK_DOMAIN: ${{ inputs.ngrok_domain }}
       run: bash "$GITHUB_ACTION_PATH/scripts/action.sh"

@@ -36,7 +36,6 @@ for that one run.
 | `NGROK_TOKEN` | for a link | always | An [ngrok authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) |
 | `BASE_URL` | no | `base_url` empty | Gateway address; empty = official DeepSeek |
 | `MODEL` | no | `model` empty | Model id(s), comma-separated; the first is the default |
-| `NGROK_DOMAIN` | no | `ngrok_domain` empty | Reserved ngrok domain, e.g. `my-dsh.ngrok.app` |
 
 `API_KEY` and `PASSWORD` have no input at all: they are secrets from end to end,
 because a workflow input is plain text in the run payload. The other four are
@@ -90,7 +89,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60          # the session's lifetime
     steps:
-      - uses: actions/checkout@v4
+      # No actions/checkout: the session gets its own scratch workspace, so
+      # there is no need to fetch this repository first.
       - uses: shaowenchen/debugger-deepseek-harness@main
         with:
           api_key: ${{ secrets.API_KEY }}
@@ -100,9 +100,19 @@ jobs:
           model: ${{ secrets.MODEL }}         # omit with base_url
 ```
 
-The session works in the repository checkout — `actions/checkout` already put
-the code there — so the agent can read what it was started for. Point
-`workspace_dir` at another absolute path to change that.
+To give the session the repository instead, check it out and point at it:
+
+```yaml
+      - uses: actions/checkout@v4
+      - uses: shaowenchen/debugger-deepseek-harness@main
+        with:
+          workspace_dir: ${{ github.workspace }}
+          # …the other inputs as above
+```
+
+The session starts in an empty `workspace/` directory of its own, so it begins
+with a clean slate — nothing from this repository is in the way. Point
+`workspace_dir` at an absolute path to work somewhere else.
 
 ## Why there is a password gateway
 
@@ -149,9 +159,9 @@ gateway reaches it over loopback on the same machine.
 ## dsh runs natively, not in a container
 
 `dsh` is installed with `npm` on the runner and run directly, so the version is
-chosen per run and no image is involved. That is also why the session works in
-the repository checkout: `actions/checkout` already put the code on the runner,
-so there is nothing to mount.
+chosen per run and no image is involved. Nothing needs mounting either: the
+session gets a scratch workspace on the runner rather than a view of this
+repository.
 
 Two consequences worth knowing:
 
@@ -173,10 +183,9 @@ Two consequences worth knowing:
 | `version` | `0.1.2-rc.1` | dsh version to install; `latest` or the pinned release |
 | `password` | generated | Password guarding the link |
 | `ngrok_token` | — | ngrok authtoken (**required** for a public link) |
-| `ngrok_domain` | — | Reserved ngrok domain, e.g. `my-dsh.ngrok.app` |
-| `base_url` | — | Custom gateway base URL; set together with `model` |
+| `base_url` | — | Model API endpoint; set together with `model` |
 | `model` | — | Model id(s), comma-separated; the first is the default |
-| `workspace_dir` | — | Directory to work in; empty = the repository checkout |
+| `workspace_dir` | `workspace` | Directory to work in; a name resolves under the session home |
 | `extra_args` | — | Extra flags for the `dsh` command |
 | `log_level` | — | `debug` prints more detail |
 
@@ -210,8 +219,9 @@ Two consequences worth knowing:
 - **One session at a time per repository** — both sessions would claim the same
   gateway port, so the workflow keys its `concurrency` group to the repository
   and a second run queues.
-- **The session works in the checkout**, so the agent can read the code it was
-  started for. Point `workspace_dir` at another absolute path to change that.
+- **The session starts empty.** It gets a scratch `workspace/` on the runner,
+  not a copy of this repository. Point `workspace_dir` at an absolute path if
+  you want it to work on code that is already on the runner.
 - **Nothing survives the run.** The runner is discarded with the job, and there
   is no S3 sync outside the image.
 

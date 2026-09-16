@@ -29,10 +29,6 @@ on:
         description: 'Model id(s), comma-separated'
         type: string
         default: ''
-      ngrok_domain:
-        description: 'Reserved ngrok domain'
-        type: string
-        default: ''
       workspace:
         description: 'Directory to work in'
         type: string
@@ -52,6 +48,8 @@ jobs:
     # The session's lifetime.
     timeout-minutes: 60
     steps:
+      # Needed only because this workflow calls the action from the working
+      # copy (`uses: ./`); the session itself uses a scratch workspace.
       - uses: actions/checkout@v4
 
       - uses: ./
@@ -63,5 +61,4 @@ jobs:
           base_url: ${{ inputs.base_url || secrets.BASE_URL }}
           model: ${{ inputs.model || secrets.MODEL }}
           ngrok_token: ${{ secrets.NGROK_TOKEN }}
-          ngrok_domain: ${{ inputs.ngrok_domain || secrets.NGROK_DOMAIN }}
           workspace_dir: ${{ inputs.workspace }}

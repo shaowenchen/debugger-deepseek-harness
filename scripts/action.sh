@@ -16,9 +16,11 @@ set -euo pipefail
 
 : "${DSH_VERSION:=0.1.2-rc.1}"
 : "${DSH_PORT:=13080}"
-# Empty means "work in the repository checkout": there is no container, so the
-# checkout dsh sees is the one this workflow already made — nothing to mount.
-: "${DSH_WORKSPACE_DIR:=${GITHUB_WORKSPACE:-$PWD}}"
+# Empty means "give me a scratch directory": the session starts in an empty
+# workspace of its own rather than in the repository checkout, so it begins with
+# a clean slate. Name → resolved under the session home; absolute path → used
+# as given.
+: "${DSH_WORKSPACE_DIR:=workspace}"
 : "${DSH_HOME_DIR:=$PWD/.dsh-session-home}"
 : "${DSH_SESSION_HOURS:=6}"
 # No session-length input: the job's own timeout-minutes is the deadline.
@@ -30,7 +32,6 @@ set -euo pipefail
 : "${DSH_LOG_LEVEL:=}"
 : "${DSH_EXTRA_ARGS:=}"
 : "${NGROK_TOKEN:=}"
-: "${NGROK_DOMAIN:=}"
 
 GATEWAY_PORT=3080
 NGROK_API_PORT=4040
@@ -98,56 +99,34 @@ log "installed: $(dsh --version 2>/dev/null || echo "$DSH_VERSION")"
 
 # ── 3. ngrok ────────────────────────────────────────────────────────────────
 
-PUBLIC_URL_OVERRIDE=""
 if [ -n "$NGROK_TOKEN" ]; then
   log "opening the ngrok tunnel (https -> 127.0.0.1:${GATEWAY_PORT})"
+  ngrok config add-authtoken "$NGROK_TOKEN" >"$RUNTIME_DIR/ngrok.log" 2>&1 \
+    || { sed 's/^/    /' "$RUNTIME_DIR/ngrok.log" 2>/dev/null || true
+         die "ngrok rejected the authtoken; check the NGROK_TOKEN secret"; }
 
-  # The local port is a POSITIONAL argument to `ngrok http`, not an `--addr`
-  # flag: passing it as a flag makes the agent exit with a usage error before
-  # any tunnel exists, which is why the link never appeared. (`addr` is only a
-  # config-file field.)
-  set -- http --log stdout --log-format logfmt "$GATEWAY_PORT"
-  if [ -n "$NGROK_DOMAIN" ]; then
-    # `--domain` reserves the hostname (v3 CLI spelling); without it ngrok
-    # assigns a random one.
-    set -- "$@" "--domain=${NGROK_DOMAIN}"
-    PUBLIC_URL_OVERRIDE="https://${NGROK_DOMAIN}"
-  fi
-  ngrok "$@" >"$RUNTIME_DIR/ngrok.log" 2>&1 &
+  # `ngrok http <port>`: the port is a positional argument. It is not an
+  # `--addr` flag — passing one made the agent exit with a usage error before
+  # any tunnel existed, which is why the link never appeared.
+  ngrok http "$GATEWAY_PORT" >"$RUNTIME_DIR/ngrok.log" 2>&1 &
   ngrok_pid=$!
   echo $ngrok_pid > "$RUNTIME_DIR/ngrok.pid"
-  # The agent's own output is mirrored into the job log, not just kept in a
+
+  # The agent's own output is mirrored into the job log, not just left in a
   # file: when a tunnel fails, its reason is the only thing that explains why,
-  # and a file nobody prints hides exactly that. Tailing a file (rather than
+  # and a file nobody prints hides exactly that. Tailing the file (rather than
   # piping the process) keeps ngrok.pid pointing at ngrok, so cleanup stops it.
   # `tail -f` needs the file to exist, and the shell creates it a moment later.
   for _ in $(seq 1 50); do [ -f "$RUNTIME_DIR/ngrok.log" ] && break; sleep 0.1; done
   tail -f "$RUNTIME_DIR/ngrok.log" 2>/dev/null | sed 's/^/[ngrok] /' &
   echo $! > "$RUNTIME_DIR/ngroklog.pid"
 
-  # A bad flag makes the agent exit instantly, and without this check the only
-  # symptom is a missing link minutes later. Confirm it survived startup.
+  # A usage error makes the agent exit instantly, and without this check the
+  # only symptom is a missing link minutes later. Confirm it survived startup.
   sleep 3
   if ! kill -0 "$ngrok_pid" 2>/dev/null; then
     sed 's/^/    /' "$RUNTIME_DIR/ngrok.log" 2>/dev/null || true
-    if [ -n "$NGROK_DOMAIN" ]; then
-      # A reserved-domain flag is an optional convenience; refusing to run the
-      # session over it would be worse than losing the stable hostname. The
-      # agent's own message above names what it expected instead.
-      warn "the ngrok agent rejected --domain=${NGROK_DOMAIN}; retrying without it"
-      PUBLIC_URL_OVERRIDE=""
-      ngrok http --log stdout --log-format logfmt "$GATEWAY_PORT" \
-        >"$RUNTIME_DIR/ngrok.log" 2>&1 &
-      ngrok_pid=$!
-      echo $ngrok_pid > "$RUNTIME_DIR/ngrok.pid"
-      sleep 3
-      kill -0 "$ngrok_pid" 2>/dev/null || {
-        sed 's/^/    /' "$RUNTIME_DIR/ngrok.log" 2>/dev/null || true
-        die "the ngrok agent exited during startup; its output is above"
-      }
-    else
-      die "the ngrok agent exited during startup; its output is above"
-    fi
+    die "the ngrok agent exited during startup; its output is above"
   fi
 else
   warn "no ngrok_token given — serving on 127.0.0.1:${GATEWAY_PORT} only, with no public link"
@@ -259,7 +238,6 @@ DSHGW_INNER_AUTHORITY="127.0.0.1:${DSH_PORT}" \
 DSHGW_PASSWORD="$DSH_PASSWORD" \
 DSHGW_SESSION_HOURS="$DSH_SESSION_HOURS" \
 DSHGW_NGROK_API="http://127.0.0.1:${NGROK_API_PORT}" \
-DSHGW_PUBLIC_URL="$PUBLIC_URL_OVERRIDE" \
 DSHGW_URL_FILE="$URL_FILE" \
   node "$GITHUB_ACTION_PATH/scripts/gateway.mjs" \
     < <(tail -f -n +1 "$DSH_LOG" 2>/dev/null) \
