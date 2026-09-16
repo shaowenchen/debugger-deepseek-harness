@@ -137,12 +137,17 @@ docker_args=(
 [ -n "$DSH_S3_REGION" ] && docker_args+=(-e "S3_REGION=${DSH_S3_REGION}")
 [ -n "$DSH_S3_PATH_STYLE" ] && docker_args+=(-e "S3_PATH_STYLE=${DSH_S3_PATH_STYLE}")
 [ -n "$DSH_LOG_LEVEL" ] && docker_args+=(-e "LOG_LEVEL=${DSH_LOG_LEVEL}")
-# These two are deliberately word-split so a caller can pass several flags;
-# quoting them would collapse "--cpus 2 --memory 4g" into one bogus argv entry.
-# shellcheck disable=SC2086
-[ -n "$DSH_EXTRA_DOCKER_ARGS" ] && docker_args+=($DSH_EXTRA_DOCKER_ARGS)
-# shellcheck disable=SC2086
-[ -n "$DSH_EXTRA_ARGS" ] && docker_args+=($DSH_EXTRA_ARGS)
+# Split the extra-flag inputs on whitespace, so `--cpus 2 --memory 4g` becomes
+# three argv entries. `read -ra` rather than an unquoted expansion: it splits
+# without also globbing, so a flag value containing `*` stays literal.
+if [ -n "$DSH_EXTRA_DOCKER_ARGS" ]; then
+  read -ra extra_docker_args <<< "$DSH_EXTRA_DOCKER_ARGS"
+  docker_args+=("${extra_docker_args[@]}")
+fi
+if [ -n "$DSH_EXTRA_ARGS" ]; then
+  read -ra extra_dsh_args <<< "$DSH_EXTRA_ARGS"
+  docker_args+=("${extra_dsh_args[@]}")
+fi
 
 docker "${docker_args[@]}" >/dev/null || die "docker run failed"
 
