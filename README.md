@@ -23,20 +23,50 @@ from anywhere.
 
 ## Quick start
 
-Add two repository secrets, then run the workflow.
+Add the secrets your route needs, then run the workflow.
 
 | Secret | Required | What it is |
 |---|---|---|
-| `DEEPSEEK_API_KEY` | yes | Your DeepSeek key (or a key for the gateway in `GATEWAY_BASE_URL`) |
+| `DEEPSEEK_API_KEY` | yes | Your model API key |
 | `NGROK_TOKEN` | yes for a public link | An [ngrok authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) |
-| `GATEWAY_BASE_URL` | for custom models | An OpenAI-compatible gateway; pair it with the `model` input |
+| `GATEWAY_BASE_URL` | for a custom gateway | An OpenAI-compatible base URL, e.g. `https://gateway.example/v1` |
+
+Optional, if you want a default model without typing it on every run, add it as a
+**repository variable** (Settings → Secrets and variables → Actions → Variables →
+`DEFAULT_MODEL`).
 
 Then: **Actions → DeepSeek Harness → Run workflow**. The run's **Summary** shows
 the link and the password. Leave `password` empty and one is generated for you.
 
-The session ends when the job's `timeout-minutes` is reached, or when you hit
-**Cancel workflow**. Nothing survives the end of the run unless you configure S3
-(below) — each session starts from a clean workspace.
+The session ends when you hit **Cancel workflow**, or when the job's
+`timeout-minutes` fires — there is no "duration" knob to set, because the job
+timeout already is one. Nothing survives the end of the run unless you configure
+S3 (below) — each session starts from a clean workspace.
+
+## Model routing
+
+Three values decide which model answers, and they map one-to-one onto what
+`dsh` itself takes:
+
+| | Where it comes from | Notes |
+|---|---|---|
+| **Base URL** | `GATEWAY_BASE_URL` secret, overridable per run by the `base_url` input | Empty = the official DeepSeek endpoint |
+| **Model** | `DEFAULT_MODEL` variable, overridable per run by the `model` input | Comma-separated for several; the first is the default |
+| **API key** | `DEEPSEEK_API_KEY` secret, and nothing else | Never an input — workflow inputs are plain text in the run |
+
+Base URL and model must agree: set both for a custom gateway, or neither for the
+official route. The action fails fast with a clear message if only one is set.
+
+The two routing values are *also* offered as dispatch inputs purely so you can
+switch models from the Run-workflow form without editing secrets. They are safe
+there — a gateway address and a model id are not credentials — but be aware that
+workflow inputs are visible as plain text to anyone who can see the run, which
+is exactly why the API key is not one of them.
+
+```yaml
+# one run against a different model, no secret edits:
+gh workflow run dsh.yml -f model=deepseek-chat,deepseek-reasoner
+```
 
 ## Using it from another repository
 
@@ -44,22 +74,19 @@ The session ends when the job's `timeout-minutes` is reached, or when you hit
 name: dsh
 on:
   workflow_dispatch:
-    inputs:
-      minutes:
-        type: number
-        default: 60
 
 jobs:
   dsh:
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ fromJSON(inputs.minutes) + 5 }}
+    timeout-minutes: 60          # the session's lifetime
     steps:
       - uses: actions/checkout@v4
       - uses: shaowenchen/debugger-deepseek-harness@main
         with:
           api_key: ${{ secrets.DEEPSEEK_API_KEY }}
           ngrok_token: ${{ secrets.NGROK_TOKEN }}
-          timeout_minutes: ${{ inputs.minutes }}
+          base_url: ${{ secrets.GATEWAY_BASE_URL }}   # omit for official DeepSeek
+          model: deepseek-chat                        # omit with base_url
 ```
 
 The checkout is mounted read-only at `/workspace` inside the session, so the
@@ -115,11 +142,11 @@ loopback only. The tunnel is the only way in.
 | `password` | generated | Password guarding the link |
 | `ngrok_token` | — | ngrok authtoken (**required** for a public link) |
 | `ngrok_domain` | — | Reserved ngrok domain, e.g. `my-dsh.ngrok.app` |
-| `timeout_minutes` | `60` | How long the session stays up |
+| `base_url` | — | Custom gateway base URL; set together with `model` |
+| `model` | — | Model id(s), comma-separated; the first is the default |
+| `timeout_minutes` | `360` | Safety bound; the **job's** `timeout-minutes` is the real deadline |
 | `image` | `shaowenchen/deepseek-harness-web:latest` | Container image |
 | `port` | `13080` | Port `dsh` listens on (3080 belongs to the gateway) |
-| `base_url` | — | OpenAI-compatible gateway; pair with `model` |
-| `model` | — | Model id(s), comma-separated; the first is the default |
 | `workspace_dir` | `default` | Workspace directory under `/root` |
 | `mount_repo` | `true` | Mount the checkout read-only at `/workspace` |
 | `extra_args` | — | Extra flags for the `dsh` command |
@@ -135,22 +162,6 @@ stopped. Sync is enabled only when `s3_bucket` is set; then `s3_endpoint`,
 `s3_access_key` and `s3_secret_key` are required. See the
 [deepseek-harness-web README](https://github.com/shaowenchen/deepseek-harness-web)
 for what is and is not synced.
-
-### Custom models
-
-Set both `base_url` and `model`:
-
-```yaml
-- uses: shaowenchen/debugger-deepseek-harness@main
-  with:
-    api_key: ${{ secrets.GATEWAY_KEY }}
-    base_url: https://gateway.example/v1
-    model: deepseek-chat,deepseek-reasoner
-    ngrok_token: ${{ secrets.NGROK_TOKEN }}
-```
-
-Both or neither: with neither, `api_key` is treated as a DeepSeek key and the
-official route is used.
 
 ## Repository layout
 
@@ -173,11 +184,13 @@ official route is used.
 - **The generated password is not masked** in the log, deliberately: masking it
   would hide it from the very job summary that has to display it. The API key
   and S3 credentials *are* masked.
-- **`timeout_minutes` must be lower than the job's own `timeout-minutes`**, so
-  the session can clean up (stop the tunnel, remove the container) before the
-  runner is reclaimed.
-- **One session per repository branch** — the workflow uses a `concurrency`
-  group so a second run queues rather than fighting over the same host ports.
+- **There is no duration input.** A session lives until you cancel the run or
+  the job's `timeout-minutes` fires, which is the same thing GitHub already
+  measures. Set `timeout-minutes` on the job (60 by default in this repo's
+  workflow) and leave `timeout_minutes` alone.
+- **One session per workspace label** — the workflow keys its `concurrency`
+  group on `repo_label`, so a second run for the same workspace queues rather
+  than fighting the first over the same host ports.
 - **The workspace is ephemeral.** Without S3, everything is gone when the run
   ends. The container's `/root` lives in `.dsh-session-home/` on the runner, and
   the runner itself is discarded with the job.

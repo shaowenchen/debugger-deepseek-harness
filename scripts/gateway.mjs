@@ -48,7 +48,6 @@ const SESSION_HOURS = Number(process.env.DSHGW_SESSION_HOURS ?? '12')
 const NGROK_API = process.env.DSHGW_NGROK_API ?? 'http://127.0.0.1:4040'
 const PUBLIC_URL_OVERRIDE = process.env.DSHGW_PUBLIC_URL ?? ''
 const URL_FILE = process.env.DSHGW_URL_FILE ?? ''
-const EXPIRES_AT = Number(process.env.DSHGW_EXPIRES_AT ?? '0')
 
 if (PASSWORD === '') {
   console.error('dsh-gateway: DSHGW_PASSWORD is required')
@@ -199,18 +198,12 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;')
 }
 
-function expiresText() {
-  if (!Number.isFinite(EXPIRES_AT) || EXPIRES_AT <= 0) return ''
-  return `This session closes at ${new Date(EXPIRES_AT).toISOString().replace('.000Z', 'Z')}.`
-}
-
 /**
  * The gate page. Fully self-contained — no external asset is referenced,
  * because every other path is either gated (and would 401 an image request) or
  * belongs to the harness. Auto light/dark via `prefers-color-scheme`.
  */
 function loginPage({ next, error }) {
-  const notice = expiresText()
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -243,7 +236,6 @@ function loginPage({ next, error }) {
   .error { margin:0 0 16px; padding:9px 11px; font-size:13px; color:var(--danger);
            border:1px solid color-mix(in srgb, var(--danger) 35%, transparent); border-radius:8px;
            background:color-mix(in srgb, var(--danger) 10%, transparent); }
-  .foot { margin:18px 0 0; color:var(--muted); font-size:12px; }
 </style>
 </head>
 <body>
@@ -256,7 +248,6 @@ function loginPage({ next, error }) {
     <input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
     <input type="hidden" name="next" value="${escapeHtml(next)}">
     <button type="submit">Sign in</button>
-    <p class="foot">${escapeHtml(notice)}</p>
   </form>
 </body>
 </html>

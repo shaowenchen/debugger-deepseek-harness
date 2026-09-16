@@ -37,10 +37,11 @@ inputs:
     default: ''
   timeout_minutes:
     description: >-
-      How long the session stays up. Keep this below the job's own
-      timeout-minutes so the step ends the session cleanly.
+      Safety bound on how long the action waits before tearing the session
+      down, in minutes. The job's own timeout-minutes is the real deadline;
+      set this at or above it, and the job's cancellation ends the session.
     required: false
-    default: '60'
+    default: '360'
   image:
     description: Container image to run.
     required: false
@@ -125,6 +126,8 @@ runs:
         DSH_IMAGE: ${{ inputs.image }}
         DSH_PORT: ${{ inputs.port }}
         DSH_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
+        DSH_BASE_URL: ${{ inputs.base_url }}
+        DSH_MODEL: ${{ inputs.model }}
       run: |
         set -euo pipefail
         case "$DSH_TIMEOUT_MINUTES" in
@@ -136,6 +139,16 @@ runs:
         esac
         # 3080 belongs to the gateway; dsh runs behind it.
         [ "$DSH_PORT" != "3080" ] || { echo "::error::port 3080 is reserved for the password gateway; pick another, e.g. 13080"; exit 1; }
+        # A custom gateway needs a model id and vice versa; either both are set
+        # or the run falls back to the official DeepSeek route.
+        if [ -n "${DSH_BASE_URL:-}" ] && [ -z "${DSH_MODEL:-}" ]; then
+          echo "::error::base_url is set without model; a custom gateway needs a model id"
+          exit 1
+        fi
+        if [ -n "${DSH_MODEL:-}" ] && [ -z "${DSH_BASE_URL:-}" ]; then
+          echo "::error::model is set without base_url; set the GATEWAY_BASE_URL secret or clear model to use official DeepSeek"
+          exit 1
+        fi
         command -v docker >/dev/null || { echo "::error::docker is not available on this runner"; exit 1; }
         docker info >/dev/null 2>&1 || { echo "::error::the docker daemon is not reachable on this runner"; exit 1; }
         docker pull "$DSH_IMAGE" >/dev/null || { echo "::error::could not pull image $DSH_IMAGE"; exit 1; }

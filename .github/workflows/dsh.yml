@@ -2,69 +2,96 @@
 # a password.
 #
 # Trigger it from the Actions tab ("Run workflow"), or:
-#   gh workflow run dsh.yml -f minutes=60
+#   gh workflow run dsh.yml
+#   gh workflow run dsh.yml -f model=deepseek-v4.1-flash
 #
 # What to expect once it starts:
 #   * the run's Summary shows the link and the password;
 #   * the link opens a sign-in page, and only the password opens the harness;
-#   * the session ends when the job's timeout is reached or you cancel the run.
+#   * the session ends when you Cancel workflow, or when the job times out.
 #
-# Nothing is persisted between sessions unless S3 inputs are configured —
+# Nothing is persisted between sessions unless the S3 inputs are configured —
 # every run starts from a clean workspace.
 name: DeepSeek Harness
 
 on:
   workflow_dispatch:
     inputs:
-      minutes:
-        description: How long the session stays up, in minutes.
-        type: number
-        default: 60
-      password:
-        description: Password for the session. Leave empty to have one generated.
+      # Model routing. `base_url` and `model` override the matching secrets for
+      # this run; the API key is the exception and lives in a secret only,
+      # because a workflow input is not a safe place for a credential.
+      #
+      # Be aware: workflow inputs are visible as plain text in the run — anyone
+      # who can see the run can read them. That is fine for a gateway address
+      # and a model id, so they are offered here for convenience; do not add
+      # anything secret to this block.
+      base_url:
+        description: >-
+          OpenAI-compatible gateway, e.g. https://gateway.example/v1. Leave
+          empty to use GATEWAY_BASE_URL. Needs model set; with neither, the
+          official DeepSeek route is used.
         type: string
         default: ''
       model:
         description: >-
-          Model id for a custom gateway, e.g. deepseek-v4.1-flash. Leave empty to
-          use the official DeepSeek route. Requires the GATEWAY_BASE_URL secret.
+          Model id, comma-separated for several; the first is the default.
+          Leave empty to use DEFAULT_MODEL. Needs base_url set (or the
+          GATEWAY_BASE_URL secret) for a custom gateway.
+        type: string
+        default: ''
+      password:
+        description: >-
+          Password for the session. Leave empty to have one generated and
+          printed in the summary.
         type: string
         default: ''
       ngrok_domain:
         description: Reserved ngrok domain to serve on, e.g. my-dsh.ngrok.app.
         type: string
         default: ''
+      repo_label:
+        description: >-
+          Short label, 12 chars or fewer, naming the repository this session is
+          sandboxed to. It becomes the workspace name, so parallel sessions do
+          not share a directory.
+        type: string
+        default: repo
       mount_repo:
         description: Mount this repository read-only at /workspace inside the session.
         type: boolean
         default: true
 
-# One session per run; the step itself owns the container's lifecycle.
 permissions:
   contents: read
 
 concurrency:
-  # A second run would fight the first over the same host ports, so queue them
-  # instead of letting both fail.
-  group: dsh-session-${{ github.ref }}
+  # Sessions are keyed by workspace name: a second run for the same workspace
+  # queues rather than fighting the first over the same host ports.
+  group: dsh-session-${{ inputs.repo_label }}
   cancel-in-progress: false
 
 jobs:
   dsh:
     runs-on: ubuntu-latest
-    # The step ends the session at its own timeout; this is the backstop, kept a
-    # few minutes longer so cleanup runs before the runner is reclaimed.
-    timeout-minutes: ${{ fromJSON(inputs.minutes) + 5 }}
+    # No session-length input: this job timeout is the deadline. When it fires
+    # the run is cancelled, the step's EXIT trap tears the container down, and
+    # the runner is reclaimed — no clock needs to be passed around. Raise it
+    # here if an hour is not enough.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
       - uses: ./
         with:
+          # The key comes from a secret and nothing else: a workflow input is
+          # plain text in the run payload.
           api_key: ${{ secrets.DEEPSEEK_API_KEY }}
+          # Gateway address and model: the dispatch input wins when filled, so
+          # one-click runs can switch models without editing secrets.
+          base_url: ${{ inputs.base_url != '' && inputs.base_url || secrets.GATEWAY_BASE_URL }}
+          model: ${{ inputs.model != '' && inputs.model || vars.DEFAULT_MODEL }}
           password: ${{ inputs.password }}
           ngrok_token: ${{ secrets.NGROK_TOKEN }}
           ngrok_domain: ${{ inputs.ngrok_domain }}
-          base_url: ${{ inputs.model != '' && secrets.GATEWAY_BASE_URL || '' }}
-          model: ${{ inputs.model }}
-          timeout_minutes: ${{ inputs.minutes }}
+          workspace_dir: ${{ inputs.repo_label }}
           mount_repo: ${{ inputs.mount_repo }}

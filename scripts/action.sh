@@ -22,7 +22,10 @@ set -euo pipefail
 : "${DSH_WORKSPACE_DIR:=default}"
 : "${DSH_HOME_DIR:=$PWD/.dsh-session-home}"
 : "${DSH_SESSION_HOURS:=6}"
-: "${DSH_TIMEOUT_MINUTES:=60}"
+# No session-length input: the job's own timeout-minutes is the deadline (see
+# action.sh's loop and the workflow). This value only sets the fallback for a
+# direct action call that has no job timeout of its own.
+: "${DSH_TIMEOUT_MINUTES:=360}"
 : "${NGROK_TOKEN:=}"
 : "${NGROK_DOMAIN:=}"
 : "${DSH_PASSWORD:=}"
@@ -85,8 +88,8 @@ mkdir -p "$RUNTIME_DIR" "$DSH_HOME_DIR"
 
 DEADLINE=$(( $(date +%s) + DSH_TIMEOUT_MINUTES * 60 ))
 
-log "session model: $MODEL_TEXT"
-log "session ends in ${DSH_TIMEOUT_MINUTES} minutes, or when you cancel the workflow"
+log "model: $MODEL_TEXT"
+log "the session stays up until the job is cancelled or times out"
 
 # ── 2. ngrok ────────────────────────────────────────────────────────────────
 
@@ -152,7 +155,6 @@ DSHGW_SESSION_HOURS="$DSH_SESSION_HOURS" \
 DSHGW_NGROK_API="http://127.0.0.1:${NGROK_API_PORT}" \
 DSHGW_PUBLIC_URL="$PUBLIC_URL_OVERRIDE" \
 DSHGW_URL_FILE="$URL_FILE" \
-DSHGW_EXPIRES_AT="$DEADLINE" \
   node "$GITHUB_ACTION_PATH/scripts/gateway.mjs" \
     < <(docker logs -f "$DSH_CONTAINER" 2>&1) \
     >"$GATEWAY_LOG" 2>&1 &
@@ -216,8 +218,6 @@ DSHGW_MODEL_TEXT="$MODEL_TEXT" \
 DSHGW_WORKSPACE="/root/${DSH_WORKSPACE_DIR}" \
 DSHGW_FALLBACK_URL="http://127.0.0.1:${GATEWAY_PORT}" \
 DSHGW_URL_FILE="$URL_FILE" \
-DSHGW_EXPIRES_TEXT="$(date -u -d "@${DEADLINE}" '+%Y-%m-%d %H:%M UTC' 2>/dev/null \
-  || date -u -r "${DEADLINE}" '+%Y-%m-%d %H:%M UTC' 2>/dev/null || echo '')" \
   "$GITHUB_ACTION_PATH/scripts/session-summary.sh"
 
 echo
@@ -226,10 +226,9 @@ echo " DeepSeek Harness is ready"
 echo
 echo "   URL:      ${public_url:-http://127.0.0.1:${GATEWAY_PORT} (no tunnel)}"
 echo "   Password: ${DSH_PASSWORD}"
-echo "   Closes:   ${DSH_TIMEOUT_MINUTES} minutes from start"
 echo
 echo " The link asks for the password; neither alone gets you in."
-echo " End the session early with Cancel workflow."
+echo " The session stays up until you cancel the workflow or the job times out."
 echo "======================================================================"
 echo
 
