@@ -16,10 +16,11 @@ set -euo pipefail
 
 : "${DSH_VERSION:=0.1.2-rc.1}"
 : "${DSH_PORT:=13080}"
-# The directory the session works in. The default is a fresh, empty directory of
-# its own under the session home, so a session starts on a clean slate and
-# cannot read or modify this repository by accident. An absolute path is used as
-# given; any other value is a name resolved under the session home.
+# The one directory the session works in, and the one dsh's process runs from.
+# The default is a fresh, empty directory of its own under the session home, so a
+# session starts on a clean slate and cannot read or modify this repository by
+# accident. An absolute path is used as given; any other value is a name resolved
+# under the session home.
 : "${DSH_WORKSPACE_DIR:=workspace}"
 : "${DSH_HOME_DIR:=$PWD/.dsh-session-home}"
 : "${DSH_SESSION_HOURS:=6}"
@@ -234,7 +235,30 @@ seed_workspace() {
 
 seed_workspace
 
-# ── 6. run dsh, restarting it when it exits ─────────────────────────────────
+# ── 6. enter the workspace ──────────────────────────────────────────────────
+#
+# The registry above decides which directory the SESSION works in. This decides
+# where the PROCESS runs, and dsh reads `process.cwd()` in several load-bearing
+# places: the sandbox policy's `workspaceRoot`, a session's fallback cwd when it
+# names no workspace, the bash and fs tools' `workdir`, and `loadLayeredEnv`,
+# which loads a `.env` from the invoking directory at boot.
+#
+# Leaving the process in the runner's working directory therefore left the
+# repository behind all of those fallbacks even though the registry pointed at
+# the empty workspace: the session *worked* in the empty directory while the
+# process — and every path it could fall back to — stayed rooted in the
+# checkout, where a `.env` would be loaded into dsh's own environment. Starting
+# dsh from inside the workspace makes the two agree, so there is one working
+# directory and it is the empty one.
+#
+# `cd` is safe from here because every path this script uses below is absolute:
+# the home, runtime, and log paths were all resolved against the runner's
+# directory before this point.
+mkdir -p "$WS_PATH"
+cd "$WS_PATH" || die "could not enter the workspace at ${WS_PATH}"
+log "dsh will run from ${WS_PATH}"
+
+# ── 7. run dsh, restarting it when it exits ─────────────────────────────────
 
 # A plugin install ends the dsh process by design (the container image wraps it
 # in the same loop). Without this the session would die the first time the user
@@ -264,7 +288,7 @@ start_dsh
 # Wait for the log file to exist before anything tails it.
 for _ in $(seq 1 20); do [ -f "$DSH_LOG" ] && break; sleep 0.5; done
 
-# ── 7. the password gateway ─────────────────────────────────────────────────
+# ── 8. the password gateway ─────────────────────────────────────────────────
 
 log "starting the password gateway on 127.0.0.1:${GATEWAY_PORT}"
 DSHGW_LISTEN_PORT="$GATEWAY_PORT" \
@@ -289,7 +313,7 @@ for _ in $(seq 1 50); do [ -f "$GATEWAY_LOG" ] && break; sleep 0.1; done
 tail -f "$GATEWAY_LOG" 2>/dev/null | sed -u 's/^/[gateway] /' &
 echo $! > "$RUNTIME_DIR/gatewaylog.pid"
 
-# ── 8. wait until it answers ────────────────────────────────────────────────
+# ── 9. wait until it answers ────────────────────────────────────────────────
 
 log "waiting for the session to become reachable"
 # Probed over HTTP, not by an open port: an answer of any kind proves dsh is
@@ -325,7 +349,7 @@ dsh_ready || {
 }
 gateway_ready || { sed 's/^/    /' "$GATEWAY_LOG" 2>/dev/null || true; die "the gateway is not answering on port ${GATEWAY_PORT}"; }
 
-# ── 9. publish, then stay alive ─────────────────────────────────────────────
+# ── 10. publish, then stay alive ────────────────────────────────────────────
 
 public_url=""
 log "waiting for the tunnel to report a public URL"

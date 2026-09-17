@@ -133,7 +133,9 @@ To give the session the repository instead, check it out and point at it:
 ```
 
 The session starts in a fresh, empty `workspace/` directory of its own, so it
-begins with a clean slate — nothing from this repository is in the way. Point
+begins with a clean slate — nothing from this repository is in the way. That
+directory is also the one `dsh` runs from, so the session's own default working
+directory is the same empty place rather than the checkout. Point
 `workspace_dir` at another path to work somewhere else, as above.
 
 ## Why there is a password gateway
@@ -207,7 +209,7 @@ Two consequences worth knowing:
 | `ngrok_token` | — | ngrok authtoken (**required** for a public link) |
 | `base_url` | — | Model API endpoint; empty = official DeepSeek |
 | `model` | `default` | Model id(s), comma-separated; the first is the default. An id may be `id\|name\|contextWindow\|maxTokens`. `default` keeps the endpoint's own default model |
-| `workspace_dir` | empty `workspace/` | Directory to work in; a name resolves under the session home |
+| `workspace_dir` | empty `workspace/` | The directory to work in; also where `dsh` runs from. A name resolves under the session home |
 | `extra_args` | — | Extra flags for the `dsh` command |
 | `log_level` | — | `debug` prints more detail |
 
@@ -243,7 +245,10 @@ Two consequences worth knowing:
   and a second run queues.
 - **The session starts empty.** It gets a fresh `workspace/` directory of its
   own, not a copy of this repository, so it cannot read or modify the action
-  that launched it. Point `workspace_dir` at an absolute path to work on code
+  that launched it. `dsh` itself runs from that directory too — a session's
+  fallback working directory, the sandbox's writable root, and the `.env` dsh
+  loads at boot all resolve against it — so the checkout is not reachable
+  through any of them. Point `workspace_dir` at an absolute path to work on code
   that is already on the runner.
 - **Nothing survives the run.** The runner is discarded with the job, and there
   is no S3 sync outside the image.

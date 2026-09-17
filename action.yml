@@ -37,7 +37,9 @@ inputs:
     required: false
     default: 'default'
   workspace_dir:
-    description: 'Directory the session works in; defaults to an empty workspace/.'
+    description: >-
+      The directory the session works in, and the one dsh runs from; defaults
+      to an empty workspace/.
     required: false
     default: ''
   extra_args:

@@ -63,4 +63,5 @@ jobs:
           model: ${{ inputs.model == 'default' && secrets.MODEL || inputs.model }}
           ngrok_token: ${{ secrets.NGROK_TOKEN }}
           # workspace_dir is left to the action's default — a fresh, empty
-          # workspace/ directory — so it needs no form field.
+          # workspace/ directory, which is also where dsh itself runs from — so
+          # it needs no form field.

@@ -68,6 +68,48 @@ jobs:
           # makes the directory empty rather than a view of the checkout.
           grep -q 'WS_PATH="\$DSH_HOME_DIR/\$DSH_WORKSPACE_DIR"' scripts/action.sh
 
+      - name: dsh's process runs from that workspace too
+        # The registry decides which directory the SESSION works in; the process
+        # cwd decides everything dsh falls back to — the sandbox policy's
+        # workspaceRoot, a session's fallback cwd, the bash/fs tool workdir, and
+        # `loadLayeredEnv`, which loads a `.env` from the invoking directory at
+        # boot. Without the `cd`, dsh runs from the runner's directory, so all of
+        # those stay rooted in the checkout even though the registry points at the
+        # empty workspace: the session works in the empty directory while the
+        # process still reads the repository's `.env` into its own environment.
+        run: |
+          set -eux
+          grep -qE '^cd "\$WS_PATH"' scripts/action.sh
+          # The `cd` must come after the workspace is resolved and its directory
+          # created, or it targets an unset/unmade path.
+          python3 - <<'PY'
+          import re, sys
+          text = open('scripts/action.sh').read()
+          lines = text.splitlines()
+          def find(pattern):
+              for i, line in enumerate(lines, 1):
+                  if re.search(pattern, line):
+                      return i
+              return -1
+          resolved = find(r'^  \*\)\s+WS_PATH=')
+          created = find(r'^mkdir -p "\$WS_PATH"')
+          entered = find(r'^cd "\$WS_PATH"')
+          started = find(r'^start_dsh$')
+          problems = []
+          if resolved < 0 or created < 0 or entered < 0 or started < 0:
+              problems.append('could not locate resolve/create/cd/start_dsh')
+          else:
+              if not resolved < entered:
+                  problems.append(f'the cd (line {entered}) runs before WS_PATH is resolved (line {resolved})')
+              if not created < entered:
+                  problems.append(f'the cd (line {entered}) runs before the directory is created (line {created})')
+              if not entered < started:
+                  problems.append(f'the cd (line {entered}) runs after dsh is started (line {started})')
+          for problem in problems:
+              print(problem, file=sys.stderr)
+          sys.exit(1 if problems else 0)
+          PY
+
       - name: YAML parses
         run: |
           set -eux
