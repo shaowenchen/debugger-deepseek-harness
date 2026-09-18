@@ -57,7 +57,7 @@ start working — the session opens on a ready workspace, so there is nothing to
 set up first.
 
 The session ends when you hit **Cancel workflow**, or when its duration runs out
-— *unlimited* by default, or pick 1, 2 or 4 hours on the form. One choice drives
+— 4 hours by default, or pick 1, 2, *unlimited* on the form. One choice drives
 both the session's own deadline and the job's `timeout-minutes`, so they cannot
 disagree. Nothing survives the end of the run; the runner is discarded with the
 job.
@@ -358,9 +358,9 @@ simply ignored.
   That is the deliverable, so masking it would hide it from the very job summary
   that has to display it. Treat the run log the way you would treat the link.
   The API key *is* masked.
-- **Duration, and what "unlimited" can mean.** The form offers 1, 2, 4 hours or
-  *unlimited* (the default), which sets both the session's own deadline and the
-  job's `timeout-minutes`. *Unlimited* asks for the runner's ceiling (360
+- **Duration, and what "unlimited" can mean.** The form offers 1, 2, 4 hours
+  (4 by default) or *unlimited*, which sets both the session's own deadline and
+  the job's `timeout-minutes`. *Unlimited* asks for the runner's ceiling (360
   minutes, the documented maximum for a GitHub-hosted job), because nothing can
   outlive the runner — so it means "no self-imposed limit", not "forever". The
   action also takes a `session_hours` input (0 = no limit) if you drive it from

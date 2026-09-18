@@ -18,10 +18,11 @@ on:
         # action reads as "no self-imposed limit"; the job still ends at the
         # runner's ceiling, since nothing here can outlive a GitHub-hosted job.
         #
-        # Unlimited by default: the session ends when you cancel the run or the
-        # runner's 6-hour ceiling arrives, which is what someone starting a
-        # session wants unless they deliberately asked for less.
-        default: 'unlimited'
+        # Four hours by default: long enough for a working session, and it lets
+        # the session stop itself and shut down cleanly rather than being killed
+        # at the runner's 6-hour ceiling. Pick *unlimited* to run to that ceiling
+        # instead, or 1/2 for a deliberately shorter bound.
+        default: '4'
         options:
           - '1'
           - '2'
