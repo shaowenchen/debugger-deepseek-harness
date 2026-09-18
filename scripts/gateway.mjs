@@ -748,7 +748,7 @@ async function publishUrl() {
   } else {
     const discover = { ngrok: discoverNgrokUrl, cloudflare: discoverCloudflareUrl }[TUNNEL]
     if (discover === undefined) {
-      log(`no URL discovery for a '${TUNNEL}' tunnel; set DSHGW_PUBLIC_URL`)
+      log(`no URL discovery for a '${TUNNEL}' tunnel`)
       return
     }
     // Bringing a tunnel up can take a while, so wait well past the point where
@@ -759,7 +759,7 @@ async function publishUrl() {
     }
   }
   if (publicUrl === '') {
-    log(`no public URL: set DSHGW_PUBLIC_URL, or check the ${TUNNEL} agent`)
+    log(`no public URL: the ${TUNNEL} agent reported none`)
     return
   }
   log(`public URL: ${publicUrl}`)

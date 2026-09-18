@@ -27,12 +27,6 @@ inputs:
       random trycloudflare.com hostname with no account behind it.
     required: false
     default: ''
-  public_url:
-    description: >-
-      Public URL of the tunnel, overriding discovery. Required with a named
-      tunnel, which never learns its own hostname.
-    required: false
-    default: ''
   base_url:
     description: 'Model API endpoint, e.g. https://gateway.example/v1.'
     required: false
@@ -103,6 +97,5 @@ runs:
         DSH_WORKSPACE_DIR: ${{ inputs.workspace_dir }}
         DSH_LOG_LEVEL: ${{ inputs.log_level }}
         DSH_EXTRA_ARGS: ${{ inputs.extra_args }}
-        DSH_PUBLIC_URL: ${{ inputs.public_url }}
         CLOUDFLARE_TOKEN: ${{ inputs.cloudflare_token }}
       run: bash "${{ github.action_path }}/../scripts/action.sh"

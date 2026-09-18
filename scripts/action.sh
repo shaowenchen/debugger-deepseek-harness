@@ -52,11 +52,6 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 : "${DSH_TUNNEL:=ngrok}"
 : "${NGROK_TOKEN:=}"
 : "${CLOUDFLARE_TOKEN:=}"
-# An explicit public URL, overriding whatever the agent's own API or log
-# reports. Needed for a Cloudflare *named* tunnel: the connector is told nothing
-# about the hostname Cloudflare routes to it, so the local side can never
-# discover it. It also covers any tunnel arrangement discovery cannot see.
-: "${DSH_PUBLIC_URL:=}"
 
 GATEWAY_PORT=3080
 # The agents' local APIs. ngrok's inspection API and cloudflared's metrics
@@ -252,14 +247,16 @@ start_cloudflare_tunnel() {
 
   # A named tunnel cannot report its own hostname: Cloudflare routes to the
   # connector without ever telling it the public name, so neither the metrics
-  # API nor the log has it. Without a URL from the caller the session comes up
-  # with no link, so say so now rather than letting it surface later as "the
-  # tunnel never reported a public URL".
-  if [ -n "$CLOUDFLARE_TOKEN" ] && [ -z "$DSH_PUBLIC_URL" ]; then
-    warn "this is a named tunnel and no public_url was given."
-    warn "The connector cannot discover its own hostname — set the public_url input"
-    warn "to the hostname this tunnel routes to, and point that hostname at"
-    warn "http://localhost:${GATEWAY_PORT} in the Cloudflare dashboard."
+  # API nor the log has it. There is no input to supply one either — the
+  # hostname is the one already configured in the dashboard, so the session
+  # still works, but its link has to be read from there rather than from this
+  # log. Say that now, because the symptom otherwise is a session that looks
+  # fine and a link that never appears.
+  if [ -n "$CLOUDFLARE_TOKEN" ]; then
+    warn "this is a named tunnel: Cloudflare does not tell the connector its own"
+    warn "hostname, so the public link cannot be discovered here. Use the hostname"
+    warn "you configured for this tunnel in the dashboard, and make sure it routes"
+    warn "to http://localhost:${GATEWAY_PORT}. The session itself is up either way."
   fi
 }
 
@@ -407,7 +404,6 @@ DSHGW_SESSION_HOURS="$DSH_SESSION_HOURS" \
 DSHGW_TUNNEL="$DSH_TUNNEL" \
 DSHGW_TUNNEL_API="$TUNNEL_API" \
 DSHGW_TUNNEL_LOG="$TUNNEL_LOG" \
-DSHGW_PUBLIC_URL="$DSH_PUBLIC_URL" \
 DSHGW_URL_FILE="$URL_FILE" \
   node "$SCRIPT_DIR/gateway.mjs" \
     < <(tail -f -n +1 "$DSH_LOG" 2>/dev/null) \

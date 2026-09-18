@@ -169,6 +169,7 @@ Both actions produce the same session; only the way in differs.
 | Credential | `NGROK_TOKEN` (required) | none, or `CLOUDFLARE_TOKEN` |
 | Hostname | random `*.ngrok-free.app` | random `*.trycloudflare.com`, or your own |
 | Stable across runs | no (free tier) | yes, with a named tunnel |
+| Link printed in the run | yes | yes for a quick tunnel; **no** for a named one |
 | Link discovery | ngrok's own API | cloudflared's metrics API, then its log |
 
 **Cloudflare, no account.** Leave `cloudflare_token` empty and a *quick tunnel*
@@ -178,18 +179,23 @@ here.
 
 **Cloudflare, named tunnel.** Set `CLOUDFLARE_TOKEN` to a tunnel token from the
 Zero Trust dashboard and the hostname is the one you configured, so the link is
-the same every run. Two things to know, both because the tunnel is
-*remotely-managed*:
+the same every run. Because the tunnel is *remotely-managed*, one thing differs
+from every other option here:
 
-1. **Its ingress is dashboard-side.** The dashboard's configuration is
-   authoritative for a remotely-managed tunnel and overrides whatever the
-   command line says, so point the tunnel's public hostname at
-   `http://localhost:3080` in the dashboard. There is no flag this action can
-   pass to do it for you.
-2. **It must be told its own URL.** Cloudflare routes to the connector without
-   ever telling it the public hostname, so neither the metrics API nor the log
-   has it. Pass the `public_url` input, or the session comes up with no link and
-   says so.
+- **The link is not printed, and cannot be.** Cloudflare routes to the connector
+  without ever telling it the public hostname, so neither the metrics API nor
+  the agent's log has it, and there is nothing local to discover. Use the
+  hostname you configured for this tunnel — the action warns with this reminder
+  rather than pretending a link it cannot know. **The session itself is
+  unaffected**: it comes up normally behind the tunnel; only the printed link is
+  missing.
+- **Its ingress is dashboard-side.** The dashboard's configuration is
+  authoritative for a remotely-managed tunnel and overrides anything the command
+  line would say about it, so point the tunnel's public hostname at
+  `http://localhost:3080` there. No flag this action can pass does it for you.
+
+If you want a Cloudflare link printed in the run like the other options, use a
+**quick tunnel** — that is the one path whose hostname the action can read back.
 
 ### One session at a time, per tunnel
 
@@ -270,7 +276,6 @@ simply ignored.
 | `password` | generated | Password guarding the link |
 | `ngrok_token` | — | ngrok authtoken (**required** for a public link, `ngrok/` only) |
 | `cloudflare_token` | — | Cloudflare tunnel token; unset = a quick tunnel (`cloudflare/` only) |
-| `public_url` | — | The tunnel's public URL, overriding discovery. Required for a Cloudflare named tunnel, which cannot discover its own hostname |
 | `base_url` | — | Model API endpoint; empty = official DeepSeek |
 | `model` | `default` | Model id(s), comma-separated; the first is the default. An id may be `id\|name\|contextWindow\|maxTokens`. `default` keeps the endpoint's own default model |
 | `workspace_dir` | empty `workspace/` | The directory to work in; also where `dsh` runs from. A name resolves under the session home |
@@ -308,8 +313,9 @@ simply ignored.
   session should be unaffected. Treat that as expected-but-unproven: it is the
   one thing worth confirming with a real browser before relying on a quick
   tunnel for anything that matters.
-- **A named tunnel's ingress lives in the dashboard.** The action cannot set the
-  service URL for you, and the tunnel cannot discover its own hostname — see
+- **A named tunnel's ingress and link both live in the dashboard.** The action
+  cannot set the service URL for you, and the connector is never told its own
+  hostname, so no link is printed for a named tunnel — see
   [Choosing a tunnel](#choosing-a-tunnel).
 - **The password is printed in the log.** That is the deliverable — treat the
   run log the way you would treat the link. Set the `password` secret to control

@@ -35,15 +35,11 @@ on:
         options:
           - 'ngrok'
           # No account needed: Cloudflare mints a random trycloudflare.com
-          # hostname. Set CLOUDFLARE_TOKEN to use a named tunnel instead.
+          # hostname. Set CLOUDFLARE_TOKEN to use a named tunnel instead — but
+          # note a named tunnel's link cannot be discovered here (Cloudflare
+          # never tells the connector its own hostname), so read it from the
+          # dashboard rather than the run's Summary.
           - 'cloudflare'
-      public_url:
-        description: 'Public URL (named Cloudflare tunnel only)'
-        type: string
-        # A named tunnel is never told its own hostname by Cloudflare, so this
-        # is the only way the session can learn its link. Not a credential:
-        # the hostname is public, and the password is still what guards it.
-        default: ''
 
 permissions:
   contents: read
