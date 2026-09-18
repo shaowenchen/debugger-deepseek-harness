@@ -44,9 +44,10 @@ Create these under **Settings → Secrets and variables → Actions → Secrets*
 | `BASE_URL` | no | Model API endpoint; empty = official DeepSeek |
 | `MODEL` | no | Model id(s), comma-separated; the first is the default |
 
-Only `MODEL` has a matching field on the Run-workflow form, so a model can be
-tried without editing secrets. The rest are secrets end to end, because a
-workflow input is plain text any reader of the run can see.
+`MODEL` and `PASSWORD` also have fields on the Run-workflow form, so a model or
+a one-off password can be tried without editing secrets; `tunnel` picks which
+action runs. The rest are secrets end to end, because a workflow input is plain
+text any reader of the run can see.
 
 ## Quick start
 
@@ -273,7 +274,7 @@ simply ignored.
 |---|---|---|
 | `api_key` | — | Model API key (**required**) |
 | `version` | `0.1.2-rc.1` | dsh version to install; `latest` or the pinned release |
-| `password` | generated | Password guarding the link |
+| `password` | — | Password guarding the link (**required**). Set it to your `PASSWORD` secret |
 | `ngrok_token` | — | ngrok authtoken (**required** for a public link, `ngrok/` only) |
 | `cloudflare_token` | — | Cloudflare tunnel token; unset = a quick tunnel (`cloudflare/` only) |
 | `base_url` | — | Model API endpoint; empty = official DeepSeek |
@@ -317,12 +318,15 @@ simply ignored.
   cannot set the service URL for you, and the connector is never told its own
   hostname, so no link is printed for a named tunnel — see
   [Choosing a tunnel](#choosing-a-tunnel).
-- **The password is printed in the log.** That is the deliverable — treat the
-  run log the way you would treat the link. Set the `password` secret to control
-  it, or to reuse a known value.
-- **The generated password is not masked** in the log, deliberately: masking it
-  would hide it from the very job summary that has to display it. The API key
-  *is* masked.
+- **The password is required, and is never generated for you.** Pass it in —
+  the `PASSWORD` secret, or the workflow form to override it for one run. An
+  empty value stops the run with an error instead of inventing one, because a
+  password nobody chose is a password nobody can sign in with once the log
+  scrolls away.
+- **The password is printed in the log, and is not masked** — deliberately.
+  That is the deliverable, so masking it would hide it from the very job summary
+  that has to display it. Treat the run log the way you would treat the link.
+  The API key *is* masked.
 - **There is no duration input.** A session lives until you cancel the run or
   the job's `timeout-minutes` fires, which is the same thing GitHub already
   measures. Set `timeout-minutes` on the job (60 by default in this repo's

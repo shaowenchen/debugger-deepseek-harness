@@ -28,6 +28,14 @@ on:
         # the form is never blank, and it falls through to the MODEL secret
         # below rather than overriding it.
         default: 'default'
+      password:
+        description: 'Password for signing in (blank = the PASSWORD secret)'
+        type: string
+        # The password is printed in the run's Summary by design, so this field
+        # is not a new exposure — it lets one run use a different password
+        # without editing secrets, like `model` above. Blank falls through to
+        # secrets.PASSWORD; if that is unset too the action refuses to start.
+        default: ''
       tunnel:
         description: 'Tunnel'
         type: choice
@@ -72,7 +80,11 @@ jobs:
           # Credentials are secrets only. base_url comes from its secret too:
           # it is set once and rarely changed, so it needs no form field.
           api_key: ${{ secrets.API_KEY }}
-          password: ${{ secrets.PASSWORD }}
+          # Blank on the form falls through to the PASSWORD secret, the
+          # same shape `model` uses above. Both empty means the action
+          # refuses to start, rather than generating a password nobody
+          # chose.
+          password: ${{ inputs.password != '' && inputs.password || secrets.PASSWORD }}
           version: ${{ inputs.version }}
           base_url: ${{ secrets.BASE_URL }}
           # 'default' — the field's own default — means "no explicit choice",
@@ -90,7 +102,11 @@ jobs:
         uses: ./cloudflare
         with:
           api_key: ${{ secrets.API_KEY }}
-          password: ${{ secrets.PASSWORD }}
+          # Blank on the form falls through to the PASSWORD secret, the
+          # same shape `model` uses above. Both empty means the action
+          # refuses to start, rather than generating a password nobody
+          # chose.
+          password: ${{ inputs.password != '' && inputs.password || secrets.PASSWORD }}
           version: ${{ inputs.version }}
           base_url: ${{ secrets.BASE_URL }}
           model: ${{ inputs.model == 'default' && secrets.MODEL || inputs.model }}

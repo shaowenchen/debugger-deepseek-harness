@@ -18,8 +18,8 @@ inputs:
     required: false
     default: '0.1.2-rc.1'
   password:
-    description: 'Password for the session link.'
-    required: false
+    description: 'Password for signing in to the session.'
+    required: true
     default: ''
   ngrok_token:
     description: 'ngrok authtoken.'

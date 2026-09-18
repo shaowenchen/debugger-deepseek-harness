@@ -96,13 +96,15 @@ mkdir -p "$RUNTIME_DIR" "$DSH_HOME_DIR"
 
 [ -n "$DSH_API_KEY" ] || die "the 'api_key' input is required (or set the API_KEY secret)"
 
-# A password is optional: empty means generate one and print it. It is
-# deliberately NOT masked, because masking would hide it from the job summary
-# that has to show it — it only ever travels to the gateway's environment.
-if [ -z "$DSH_PASSWORD" ]; then
-  DSH_PASSWORD=$(node -e 'console.log(require("node:crypto").randomBytes(10).toString("hex"))')
-  log "generated a session password"
-fi
+# The password is required and never generated here. An empty one used to mean
+# "make one up and print it", which quietly produced a session nobody could sign
+# into if the printed value went unread — and made the run's log the only record
+# of a credential. The caller is expected to pass its PASSWORD secret, so a
+# missing value is a setup mistake worth stopping for, not one to paper over.
+#
+# It is deliberately NOT masked: masking would hide it from the job summary that
+# has to show it, and it only ever travels to the gateway's environment.
+[ -n "$DSH_PASSWORD" ] || die "the 'password' input is required (or set the PASSWORD secret)"
 
 # The route is decided by base_url alone. model always has a value (it defaults
 # to "default"), so it cannot be the signal for "use the official endpoint".
