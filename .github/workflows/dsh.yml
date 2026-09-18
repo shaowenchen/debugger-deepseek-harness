@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       session_hours:
-        description: 'Duration(h)'
+        description: 'Duration(hours)'
         type: choice
         # Drives both the session's own deadline and this job's timeout, so the
         # two cannot drift apart. `unlimited` is passed on as 0, which the
