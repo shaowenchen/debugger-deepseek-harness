@@ -57,9 +57,10 @@ start working — the session opens on a ready workspace, so there is nothing to
 set up first.
 
 The session ends when you hit **Cancel workflow**, or when its duration runs out
-— pick 1, 2, 4 hours or *unlimited* on the form. One choice drives both the
-session's own deadline and the job's `timeout-minutes`, so they cannot disagree.
-Nothing survives the end of the run; the runner is discarded with the job.
+— *unlimited* by default, or pick 1, 2 or 4 hours on the form. One choice drives
+both the session's own deadline and the job's `timeout-minutes`, so they cannot
+disagree. Nothing survives the end of the run; the runner is discarded with the
+job.
 
 ## Model routing
 
@@ -121,10 +122,9 @@ on:
 jobs:
   dsh:
     runs-on: ubuntu-latest
-    # A little more than the session itself, so the action's own deadline fires
-    # first and shuts down cleanly. Keep the two in step: `session_hours` below
-    # is 4, so this is 4h plus a margin for setup and teardown.
-    timeout-minutes: 260
+    # The session's lifetime: 360 is the runner's ceiling. See below for how to
+    # end a session earlier without the job being killed at this limit.
+    timeout-minutes: 360
     steps:
       # No actions/checkout: the session gets its own scratch workspace, so
       # there is no need to fetch this repository first.
@@ -132,9 +132,23 @@ jobs:
         with:
           api_key: ${{ secrets.API_KEY }}
           password: ${{ secrets.PASSWORD }}
-          session_hours: 4                    # the session's own deadline
           base_url: ${{ secrets.BASE_URL }}   # omit for official DeepSeek
           model: ${{ secrets.MODEL }}         # omit with base_url
+```
+
+Nothing sets `session_hours`, so the session has no deadline of its own and runs
+until the job's `timeout-minutes` ends it. To have the session stop *itself*
+first — which is what lets the action shut down cleanly instead of being killed
+at the ceiling — pass `session_hours` a little below the job's timeout, and give
+`timeout-minutes` a few minutes of headroom for setup and teardown:
+
+```yaml
+    timeout-minutes: 260
+    steps:
+      - uses: shaowenchen/debugger-deepseek-harness/cloudflare@main
+        with:
+          session_hours: 4
+          # …the other inputs as above
 ```
 
 That is a *quick* tunnel: no Cloudflare account, no extra secret. Add
@@ -344,9 +358,9 @@ simply ignored.
   That is the deliverable, so masking it would hide it from the very job summary
   that has to display it. Treat the run log the way you would treat the link.
   The API key *is* masked.
-- **Duration, and what "unlimited" can mean.** The form offers 1, 2, 4 hours
-  (4 by default) or *unlimited*, which sets both the session's own deadline and
-  the job's `timeout-minutes`. *Unlimited* asks for the runner's ceiling (360
+- **Duration, and what "unlimited" can mean.** The form offers 1, 2, 4 hours or
+  *unlimited* (the default), which sets both the session's own deadline and the
+  job's `timeout-minutes`. *Unlimited* asks for the runner's ceiling (360
   minutes, the documented maximum for a GitHub-hosted job), because nothing can
   outlive the runner — so it means "no self-imposed limit", not "forever". The
   action also takes a `session_hours` input (0 = no limit) if you drive it from

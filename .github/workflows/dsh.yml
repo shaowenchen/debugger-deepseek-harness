@@ -17,7 +17,11 @@ on:
         # two cannot drift apart. `unlimited` is passed on as 0, which the
         # action reads as "no self-imposed limit"; the job still ends at the
         # runner's ceiling, since nothing here can outlive a GitHub-hosted job.
-        default: '4'
+        #
+        # Unlimited by default: the session ends when you cancel the run or the
+        # runner's 6-hour ceiling arrives, which is what someone starting a
+        # session wants unless they deliberately asked for less.
+        default: 'unlimited'
         options:
           - '1'
           - '2'
