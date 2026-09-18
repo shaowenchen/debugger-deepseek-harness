@@ -13,19 +13,10 @@ Two actions live here, differing only in how the link is published:
 Everything else is the same: the same password gateway, the same `dsh`
 installation, the same inputs, the same session lifetime.
 
-It combines two projects:
-
-- **[debugger-action](https://github.com/shaowenchen/debugger-action)** — the
-  "give me a disposable box to poke at from a workflow run" idea, and its ngrok
-  tunnel setup.
-- **[deepseek-harness-web](https://github.com/shaowenchen/deepseek-harness-web)** —
-  the packaged `dsh` web image, whose pinned dsh version is this action's
-  default and whose model-routing conventions it follows.
-
 What you get: a run that prints something like
 
 ```
-https://1a2b-3c4d.ngrok-free.app     password: 9f3c1a7e20b845dd1c9e
+https://brave-lion-fights-hard.trycloudflare.com     password: 9f3c1a7e20b845dd1c9e
 ```
 
 Open the link, type the password, and you are in the harness — in your browser,
@@ -44,10 +35,17 @@ Create these under **Settings → Secrets and variables → Actions → Secrets*
 | `BASE_URL` | no | Model API endpoint; empty = official DeepSeek |
 | `MODEL` | no | Model id(s), comma-separated; the first is the default |
 
-`MODEL` and `PASSWORD` also have fields on the Run-workflow form, so a model or
-a one-off password can be tried without editing secrets; `tunnel` picks which
-action runs. The rest are secrets end to end, because a workflow input is plain
-text any reader of the run can see.
+`PASSWORD` and `MODEL` also have fields on the Run-workflow form, so a one-off
+password or model can be tried without editing secrets; `session_hours` sets the
+session's duration, `tunnel` picks which action runs, and `version` picks the
+`dsh` release. `API_KEY`, `BASE_URL`, `NGROK_TOKEN` and `CLOUDFLARE_TOKEN` are
+secrets end to end — a workflow input is plain text any reader of the run sees.
+
+The `PASSWORD` field is the exception worth naming: it is a secret *and* a form
+field, so a value typed there is visible in the run. That is consistent with the
+action, which prints the password in the run's Summary by design — but if you
+would rather it never appear in plain text, leave the field blank and set the
+secret only.
 
 ## Quick start
 
@@ -123,7 +121,10 @@ on:
 jobs:
   dsh:
     runs-on: ubuntu-latest
-    timeout-minutes: 260         # 4h session + setup/shutdown (see session_hours)
+    # A little more than the session itself, so the action's own deadline fires
+    # first and shuts down cleanly. Keep the two in step: `session_hours` below
+    # is 4, so this is 4h plus a margin for setup and teardown.
+    timeout-minutes: 260
     steps:
       # No actions/checkout: the session gets its own scratch workspace, so
       # there is no need to fetch this repository first.
@@ -131,6 +132,7 @@ jobs:
         with:
           api_key: ${{ secrets.API_KEY }}
           password: ${{ secrets.PASSWORD }}
+          session_hours: 4                    # the session's own deadline
           base_url: ${{ secrets.BASE_URL }}   # omit for official DeepSeek
           model: ${{ secrets.MODEL }}         # omit with base_url
 ```
@@ -197,15 +199,25 @@ from every other option here:
 - **Its ingress is dashboard-side.** The dashboard's configuration is
   authoritative for a remotely-managed tunnel and overrides anything the command
   line would say about it, so point the tunnel's public hostname at
-  `http://localhost:3080` there. No flag this action can pass does it for you.
+  `http://localhost:3080` there — service type **HTTP**, not HTTPS. Cloudflare
+  terminates TLS at its edge and the gateway speaks plain HTTP on the runner, so
+  choosing HTTPS gives a tunnel that connects and a page that never loads. No
+  flag this action can pass does any of this for you.
+
+  `3080` is the **password gateway**, not `dsh` itself. Pointing the tunnel at
+  `dsh`'s own port (`13080`) skips the password gate, and `dsh`'s `/api` Host
+  fence would refuse the tunneled requests anyway — the gateway is what makes a
+  tunnel work at all (see [Why there is a password gateway](#why-there-is-a-password-gateway)).
 
 If you want a Cloudflare link printed in the run like the other options, use a
 **quick tunnel** — that is the one path whose hostname the action can read back.
 
-### One session at a time, per tunnel
+### One session at a time, per repository
 
 The gateway port is fixed at `3080`, so two sessions in the same job would
-collide. Both actions also assume a fresh runner.
+collide; this repository's workflow keys its `concurrency` group to the
+repository and a second run queues. A workflow in *another* repository is
+unaffected — it gets its own runner. Both actions also assume a fresh runner.
 
 ## Why there is a password gateway
 
@@ -258,15 +270,12 @@ repository.
 
 Two consequences worth knowing:
 
-- **The version dropdown.** `0.1.2-rc.1` matches the pin in
-  deepseek-harness-web's image, so a session here runs the same `dsh` as that
-  image. `latest` resolves npm's `latest` tag at install time, so it never goes
-  stale — CI runs the gateway end-to-end suite against **both** options, because
-  the gateway depends on dsh internals (the launch token, the authority-bound
-  cookie, the `/api` Host fence) that a new release could change.
-- **No S3 persistence.** The image's S3 sync daemon does not exist here; a
-  session is gone when the run ends. Use the image (or a resumed
-  `DSH_HOME`) if you need a workspace that outlives the run.
+- **The version dropdown.** `0.1.2-rc.1` is the pinned default, and `latest`
+  resolves npm's `latest` tag at install time so it never goes stale. CI runs
+  the gateway end-to-end suite against **both** options, because the gateway
+  depends on `dsh` internals (the launch token, the authority-bound cookie, the
+  `/api` Host fence) that a new release could change.
+- **Nothing is persisted.** A session is gone when the run ends.
 
 ## Inputs
 
@@ -298,6 +307,9 @@ simply ignored.
 | `scripts/gateway.mjs` | Password gate and reverse proxy (zero dependencies) |
 | `scripts/settings.mjs` | Writes the model configuration (both routes) into `$DSH_HOME/settings.yaml` |
 | `scripts/session-summary.sh` | Publishes the link and password to the job summary |
+| `tests/gateway.e2e.mjs` | The gateway driven against a real `dsh` (CI, both dsh versions) |
+| `tests/url-discovery.mjs` | Public-URL discovery for each tunnel, against stub agents |
+| `tests/session-cookie.mjs` | The gateway cookie's bounded and unlimited expiry branches |
 | `.github/workflows/dsh.yml` | The `workflow_dispatch` entry point for this repo |
 | `.github/workflows/ci.yml` | Lint + the gateway end-to-end suite, on every offered dsh version |
 
@@ -349,8 +361,8 @@ simply ignored.
   loads at boot all resolve against it — so the checkout is not reachable
   through any of them. Point `workspace_dir` at an absolute path to work on code
   that is already on the runner.
-- **Nothing survives the run.** The runner is discarded with the job, and there
-  is no S3 sync outside the image.
+- **Nothing survives the run.** The runner is discarded with the job, and the
+  session's workspace goes with it.
 
 ## License
 

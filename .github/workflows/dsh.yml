@@ -2,8 +2,9 @@
 #   gh workflow run dsh.yml
 #   gh workflow run dsh.yml -f model=some-other-model
 #
-# The Summary of the run carries the link; sign in with your PASSWORD secret.
-# The session ends when you cancel the run or the job times out.
+# The Summary of the run carries the link; sign in with the password you set as
+# the PASSWORD secret. The session ends when you cancel the run, when its
+# duration runs out, or when the job times out.
 name: DeepSeek Harness
 
 on:
@@ -22,9 +23,10 @@ on:
           - '2'
           - '4'
           - 'unlimited'
-      # All optional: leave one blank and the secret of the same name is used.
-      # None of these is a credential — the API key and password are secrets
-      # only, because a workflow input is plain text any reader of the run sees.
+      # Every field here has a working default or falls back to a secret, so a
+      # run needs none of them filled in. `password` is the one credential among
+      # them: it falls back to the PASSWORD secret, and a value typed here is
+      # plain text in the run — see the note on that field below.
       version:
         description: 'Version'
         type: choice
@@ -45,7 +47,10 @@ on:
         description: 'Password(Option)'
         type: string
         # Blank falls through to secrets.PASSWORD; if that is unset too the
-        # action refuses to start rather than generating one.
+        # action refuses to start rather than generating one. A value typed here
+        # is plain text in the run — the action prints the password in the
+        # Summary anyway, so this is not a new exposure, but the secret exists
+        # for anyone who would rather it were never written down.
         default: ''
       tunnel:
         description: 'Tunnel'
