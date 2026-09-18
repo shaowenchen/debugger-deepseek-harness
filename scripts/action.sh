@@ -51,13 +51,25 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # with its credential left blank, which already prints a working loopback URL.
 : "${DSH_TUNNEL:=ngrok}"
 : "${NGROK_TOKEN:=}"
+: "${CLOUDFLARE_TOKEN:=}"
+# An explicit public URL, overriding whatever the agent's own API or log
+# reports. Needed for a Cloudflare *named* tunnel: the connector is told nothing
+# about the hostname Cloudflare routes to it, so the local side can never
+# discover it. It also covers any tunnel arrangement discovery cannot see.
+: "${DSH_PUBLIC_URL:=}"
 
 GATEWAY_PORT=3080
-# ngrok's inspection API port; the gateway needs it to learn the public URL.
-# cloudflared's equivalent is set in its own branch, since it only exists when
-# that agent runs.
+# The agents' local APIs. ngrok's inspection API and cloudflared's metrics
+# server respectively; the gateway needs the matching one to learn the public
+# URL, and each is only asked for by the tunnel that has it.
+#
+# Both are the *first* address the gateway tries, not the only one: each agent
+# steps to the next free port when its default is taken, so the gateway scans a
+# short range from here. See TUNNEL_API below.
 NGROK_API_PORT=4040
-TUNNEL_API="http://127.0.0.1:${NGROK_API_PORT}"
+CLOUDFLARED_METRICS_PORT=20241
+# Set by whichever tunnel branch runs, before the gateway is started.
+TUNNEL_API=""
 RUNTIME_DIR="$PWD/.dsh-session"
 URL_FILE="$RUNTIME_DIR/url.txt"
 GATEWAY_LOG="$RUNTIME_DIR/gateway.log"
@@ -179,6 +191,8 @@ confirm_tunnel_alive() {
 }
 
 start_ngrok_tunnel() {
+  # ngrok's inspection API, which is where its public URL is read from.
+  TUNNEL_API="http://127.0.0.1:${NGROK_API_PORT}"
   if [ -z "$NGROK_TOKEN" ]; then
     warn "no ngrok_token given — serving on 127.0.0.1:${GATEWAY_PORT} only, with no public link"
     return 0
@@ -200,8 +214,58 @@ start_ngrok_tunnel() {
   confirm_tunnel_alive
 }
 
+start_cloudflare_tunnel() {
+  # `--no-autoupdate` because cloudflared otherwise checks for and installs a
+  # newer build of itself mid-run; a self-replacement during a live session is
+  # not a surprise worth having.
+  #
+  # The metrics port is deliberately NOT pinned with `--metrics`. Unpinned,
+  # cloudflared binds the first free port in 20241-20245 and steps past a busy
+  # one; pinned, a busy port is fatal — it logs "address already in use" and
+  # exits without registering a single connection. Since the gateway scans that
+  # same five-port range (and this script's TUNNEL_API is only the scan's
+  # starting point), leaving it unpinned costs nothing and cannot kill the
+  # tunnel. If all five are taken the gateway falls back to the agent's log.
+  local base=(cloudflared tunnel --no-autoupdate)
+  TUNNEL_API="http://127.0.0.1:${CLOUDFLARED_METRICS_PORT}"
+
+  if [ -n "$CLOUDFLARE_TOKEN" ]; then
+    # A named tunnel. Its ingress — which local service the public hostname
+    # maps to — lives in the Cloudflare dashboard, NOT here: for a
+    # remotely-managed tunnel the dashboard's config is authoritative and
+    # overrides anything the command line would say about it. Point the
+    # tunnel's public hostname at http://localhost:${GATEWAY_PORT} there.
+    log "opening the Cloudflare named tunnel -> 127.0.0.1:${GATEWAY_PORT}"
+    "${base[@]}" run --token "$CLOUDFLARE_TOKEN" >"$TUNNEL_LOG" 2>&1 &
+  else
+    log "opening a Cloudflare quick tunnel (https -> 127.0.0.1:${GATEWAY_PORT})"
+    # trycloudflare.com: no account, no login, no cert.pem. The hostname is
+    # minted per connection, which is why the gateway reads it back from the
+    # agent rather than being told it.
+    "${base[@]}" --url "http://127.0.0.1:${GATEWAY_PORT}" >"$TUNNEL_LOG" 2>&1 &
+  fi
+  tunnel_pid=$!
+  echo "$tunnel_pid" > "$RUNTIME_DIR/tunnel.pid"
+
+  mirror_tunnel_log
+  confirm_tunnel_alive
+
+  # A named tunnel cannot report its own hostname: Cloudflare routes to the
+  # connector without ever telling it the public name, so neither the metrics
+  # API nor the log has it. Without a URL from the caller the session comes up
+  # with no link, so say so now rather than letting it surface later as "the
+  # tunnel never reported a public URL".
+  if [ -n "$CLOUDFLARE_TOKEN" ] && [ -z "$DSH_PUBLIC_URL" ]; then
+    warn "this is a named tunnel and no public_url was given."
+    warn "The connector cannot discover its own hostname — set the public_url input"
+    warn "to the hostname this tunnel routes to, and point that hostname at"
+    warn "http://localhost:${GATEWAY_PORT} in the Cloudflare dashboard."
+  fi
+}
+
 case "$DSH_TUNNEL" in
   ngrok)      start_ngrok_tunnel ;;
+  cloudflare) start_cloudflare_tunnel ;;
   *)          die "unknown DSH_TUNNEL '${DSH_TUNNEL}'; expected 'ngrok' or 'cloudflare'" ;;
 esac
 
@@ -342,6 +406,8 @@ DSHGW_PASSWORD="$DSH_PASSWORD" \
 DSHGW_SESSION_HOURS="$DSH_SESSION_HOURS" \
 DSHGW_TUNNEL="$DSH_TUNNEL" \
 DSHGW_TUNNEL_API="$TUNNEL_API" \
+DSHGW_TUNNEL_LOG="$TUNNEL_LOG" \
+DSHGW_PUBLIC_URL="$DSH_PUBLIC_URL" \
 DSHGW_URL_FILE="$URL_FILE" \
   node "$SCRIPT_DIR/gateway.mjs" \
     < <(tail -f -n +1 "$DSH_LOG" 2>/dev/null) \
@@ -439,6 +505,7 @@ DSHGW_PASSWORD_SHOWN="$DSH_PASSWORD" \
 DSHGW_MODEL_TEXT="$MODEL_TEXT" \
 DSHGW_VERSION_TEXT="$DSH_VERSION" \
 DSHGW_WORKSPACE="$WS_PATH" \
+DSHGW_TUNNEL_NAME="$tunnel_name" \
 DSHGW_FALLBACK_URL="http://127.0.0.1:${GATEWAY_PORT}" \
 DSHGW_URL_FILE="$URL_FILE" \
   "$SCRIPT_DIR/session-summary.sh"

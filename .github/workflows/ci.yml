@@ -35,6 +35,13 @@ jobs:
           node --check scripts/gateway.mjs
           node --check scripts/settings.mjs
           node --check tests/gateway.e2e.mjs
+          node --check tests/url-discovery.mjs
+
+      - name: Public URL discovery
+        # No dsh, no tunnel agent, no network: a stub API stands in for the
+        # agent. This is the only check that runs the discovery code at all —
+        # the end-to-end job sets DSHGW_PUBLIC_URL and so skips it.
+        run: node tests/url-discovery.mjs
 
       - name: The dsh home the script writes to is the one dsh reads
         # dsh resolves its home from $DSH_HOME and otherwise falls back to

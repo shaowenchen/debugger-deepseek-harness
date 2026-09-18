@@ -24,7 +24,7 @@ fi
     echo 'The link alone is not enough — the page asks for the password below.'
   else
     echo "**No public URL was published.** The tunnel did not come up; check the"
-    echo "\`ngrok\` and \`gateway\` steps above."
+    echo "\`${DSHGW_TUNNEL_NAME:-tunnel}\` and \`gateway\` steps above."
   fi
   echo
   echo "| | |"

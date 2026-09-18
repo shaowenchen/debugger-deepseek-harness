@@ -3,6 +3,16 @@
 Start an ephemeral **DeepSeek Harness** (`dsh`) web session from GitHub Actions,
 hand yourself a temporary link, and sign in with a password.
 
+Two actions live here, differing only in how the link is published:
+
+| Action | Tunnel | Needs |
+|---|---|---|
+| **[`ngrok/`](ngrok)** | ngrok | an [ngrok authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) |
+| **[`cloudflare/`](cloudflare)** | Cloudflare Tunnel | nothing — or a tunnel token for a stable hostname |
+
+Everything else is the same: the same password gateway, the same `dsh`
+installation, the same inputs, the same session lifetime.
+
 It combines two projects:
 
 - **[debugger-action](https://github.com/shaowenchen/debugger-action)** — the
@@ -21,8 +31,6 @@ https://1a2b-3c4d.ngrok-free.app     password: 9f3c1a7e20b845dd1c9e
 Open the link, type the password, and you are in the harness — in your browser,
 from anywhere.
 
-## Quick start
-
 ## Secrets
 
 Create these under **Settings → Secrets and variables → Actions → Secrets**.
@@ -31,7 +39,8 @@ Create these under **Settings → Secrets and variables → Actions → Secrets*
 |---|---|---|
 | `API_KEY` | yes | Your model API key |
 | `PASSWORD` | yes | The password you sign in with |
-| `NGROK_TOKEN` | for a link | An [ngrok authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) |
+| `NGROK_TOKEN` | for ngrok | An [ngrok authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) |
+| `CLOUDFLARE_TOKEN` | no | A [Cloudflare tunnel token](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel/) for a stable hostname; unset = a random `trycloudflare.com` link |
 | `BASE_URL` | no | Model API endpoint; empty = official DeepSeek |
 | `MODEL` | no | Model id(s), comma-separated; the first is the default |
 
@@ -41,10 +50,11 @@ workflow input is plain text any reader of the run can see.
 
 ## Quick start
 
-Add `API_KEY`, `PASSWORD`, and `NGROK_TOKEN`. Then: **Actions → DeepSeek
-Harness → Run workflow**. Open the link from the run's **Summary**, type your
-password, and start working — the session opens on a ready workspace, so there
-is nothing to set up first.
+Add `API_KEY`, `PASSWORD`, and one tunnel's credential — `NGROK_TOKEN`, or
+nothing at all if you are using Cloudflare. Then: **Actions → DeepSeek Harness →
+Run workflow**. Open the link from the run's **Summary**, type your password, and
+start working — the session opens on a ready workspace, so there is nothing to
+set up first.
 
 The session ends when you hit **Cancel workflow**, or when the job's
 `timeout-minutes` fires — there is no "duration" knob to set, because the job
@@ -101,6 +111,8 @@ gh workflow run dsh.yml -f model=some-other-model
 
 ## Using it from another repository
 
+Pick the action by its directory — `ngrok/` or `cloudflare/`:
+
 ```yaml
 name: dsh
 on:
@@ -113,7 +125,7 @@ jobs:
     steps:
       # No actions/checkout: the session gets its own scratch workspace, so
       # there is no need to fetch this repository first.
-      - uses: shaowenchen/debugger-deepseek-harness@main
+      - uses: shaowenchen/debugger-deepseek-harness/ngrok@main
         with:
           api_key: ${{ secrets.API_KEY }}
           password: ${{ secrets.PASSWORD }}
@@ -122,11 +134,21 @@ jobs:
           model: ${{ secrets.MODEL }}         # omit with base_url
 ```
 
+For a Cloudflare tunnel instead, swap the reference and the credential:
+
+```yaml
+      - uses: shaowenchen/debugger-deepseek-harness/cloudflare@main
+        with:
+          api_key: ${{ secrets.API_KEY }}
+          password: ${{ secrets.PASSWORD }}
+          cloudflare_token: ${{ secrets.CLOUDFLARE_TOKEN }}  # omit for a quick tunnel
+```
+
 To give the session the repository instead, check it out and point at it:
 
 ```yaml
       - uses: actions/checkout@v4
-      - uses: shaowenchen/debugger-deepseek-harness@main
+      - uses: shaowenchen/debugger-deepseek-harness/ngrok@main
         with:
           workspace_dir: ${{ github.workspace }}
           # …the other inputs as above
@@ -137,6 +159,42 @@ begins with a clean slate — nothing from this repository is in the way. That
 directory is also the one `dsh` runs from, so the session's own default working
 directory is the same empty place rather than the checkout. Point
 `workspace_dir` at another path to work somewhere else, as above.
+
+## Choosing a tunnel
+
+Both actions produce the same session; only the way in differs.
+
+| | ngrok | Cloudflare Tunnel |
+|---|---|---|
+| Credential | `NGROK_TOKEN` (required) | none, or `CLOUDFLARE_TOKEN` |
+| Hostname | random `*.ngrok-free.app` | random `*.trycloudflare.com`, or your own |
+| Stable across runs | no (free tier) | yes, with a named tunnel |
+| Link discovery | ngrok's own API | cloudflared's metrics API, then its log |
+
+**Cloudflare, no account.** Leave `cloudflare_token` empty and a *quick tunnel*
+starts: Cloudflare mints a random `*.trycloudflare.com` hostname with no login,
+no certificate and no account behind it. This is the least setup of any option
+here.
+
+**Cloudflare, named tunnel.** Set `CLOUDFLARE_TOKEN` to a tunnel token from the
+Zero Trust dashboard and the hostname is the one you configured, so the link is
+the same every run. Two things to know, both because the tunnel is
+*remotely-managed*:
+
+1. **Its ingress is dashboard-side.** The dashboard's configuration is
+   authoritative for a remotely-managed tunnel and overrides whatever the
+   command line says, so point the tunnel's public hostname at
+   `http://localhost:3080` in the dashboard. There is no flag this action can
+   pass to do it for you.
+2. **It must be told its own URL.** Cloudflare routes to the connector without
+   ever telling it the public hostname, so neither the metrics API nor the log
+   has it. Pass the `public_url` input, or the session comes up with no link and
+   says so.
+
+### One session at a time, per tunnel
+
+The gateway port is fixed at `3080`, so two sessions in the same job would
+collide. Both actions also assume a fresh runner.
 
 ## Why there is a password gateway
 
@@ -157,7 +215,7 @@ safely paste into a chat. Three facts about `dsh web` (verified against
 So a plain TCP tunnel to `dsh` cannot work, and publishing the token link leaks
 the credential.
 
-This action puts a small reverse proxy (`scripts/gateway.mjs`) in front instead,
+These actions put a small reverse proxy (`scripts/gateway.mjs`) in front instead,
 and it owns both ends of the connection:
 
 ```
@@ -201,12 +259,18 @@ Two consequences worth knowing:
 
 ## Inputs
 
+Both actions declare the same inputs. `ngrok_token` and `cloudflare_token` are
+not interchangeable — each action reads its own, and passing the other one is
+simply ignored.
+
 | Input | Default | Description |
 |---|---|---|
 | `api_key` | — | Model API key (**required**) |
 | `version` | `0.1.2-rc.1` | dsh version to install; `latest` or the pinned release |
 | `password` | generated | Password guarding the link |
-| `ngrok_token` | — | ngrok authtoken (**required** for a public link) |
+| `ngrok_token` | — | ngrok authtoken (**required** for a public link, `ngrok/` only) |
+| `cloudflare_token` | — | Cloudflare tunnel token; unset = a quick tunnel (`cloudflare/` only) |
+| `public_url` | — | The tunnel's public URL, overriding discovery. Required for a Cloudflare named tunnel, which cannot discover its own hostname |
 | `base_url` | — | Model API endpoint; empty = official DeepSeek |
 | `model` | `default` | Model id(s), comma-separated; the first is the default. An id may be `id\|name\|contextWindow\|maxTokens`. `default` keeps the endpoint's own default model |
 | `workspace_dir` | empty `workspace/` | The directory to work in; also where `dsh` runs from. A name resolves under the session home |
@@ -217,8 +281,9 @@ Two consequences worth knowing:
 
 | Path | What it is |
 |---|---|
-| `action.yml` | The composite action |
-| `scripts/action.sh` | Orchestration: install dsh, run it, gateway, tunnel, session lifetime |
+| `ngrok/action.yml` | The ngrok action |
+| `cloudflare/action.yml` | The Cloudflare Tunnel action |
+| `scripts/action.sh` | Orchestration, shared by both: install dsh, run it, gateway, tunnel, session lifetime |
 | `scripts/gateway.mjs` | Password gate and reverse proxy (zero dependencies) |
 | `scripts/settings.mjs` | Writes the model configuration (both routes) into `$DSH_HOME/settings.yaml` |
 | `scripts/session-summary.sh` | Publishes the link and password to the job summary |
@@ -230,6 +295,22 @@ Two consequences worth knowing:
 - **Sessions are public-if-guessed.** The tunnel hostname is random but the
   session is reachable by anyone with the link *and* the password. ngrok's free
   tier also shows an interstitial warning page before the harness loads.
+- **A Cloudflare quick tunnel is for trying things, not for keeping them.** It
+  is explicitly aimed at testing and development, carries no SLA, caps
+  concurrent in-flight requests at 200 (past which requests get `429`), and its
+  hostname is minted per connection — a restart gives a different link. Two
+  protocol caveats, both measured against a live quick tunnel rather than read
+  off a doc: Server-Sent Events are not supported at all, and a WebSocket
+  upgrade negotiated over **HTTP/2** is answered `500` by the trycloudflare
+  Worker in front (a Worker limitation — it cannot proxy the `101`). The
+  upgrade over HTTP/1.1 works, browsers do the WebSocket handshake on HTTP/1.1,
+  and this session's live traffic is the WebSocket mux rather than SSE — so the
+  session should be unaffected. Treat that as expected-but-unproven: it is the
+  one thing worth confirming with a real browser before relying on a quick
+  tunnel for anything that matters.
+- **A named tunnel's ingress lives in the dashboard.** The action cannot set the
+  service URL for you, and the tunnel cannot discover its own hostname — see
+  [Choosing a tunnel](#choosing-a-tunnel).
 - **The password is printed in the log.** That is the deliverable — treat the
   run log the way you would treat the link. Set the `password` secret to control
   it, or to reuse a known value.
@@ -240,7 +321,7 @@ Two consequences worth knowing:
   the job's `timeout-minutes` fires, which is the same thing GitHub already
   measures. Set `timeout-minutes` on the job (60 by default in this repo's
   workflow).
-- **One session at a time per repository** — both sessions would claim the same
+- **One session at a time per repository** — sessions would claim the same
   gateway port, so the workflow keys its `concurrency` group to the repository
   and a second run queues.
 - **The session starts empty.** It gets a fresh `workspace/` directory of its

@@ -33,7 +33,7 @@
  */
 
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { createServer, request as httpRequest } from 'node:http'
 import { createInterface } from 'node:readline'
 
@@ -51,6 +51,10 @@ const SESSION_HOURS = Number(process.env.DSHGW_SESSION_HOURS ?? '12')
 // no link.
 const TUNNEL = process.env.DSHGW_TUNNEL ?? 'ngrok'
 const TUNNEL_API = process.env.DSHGW_TUNNEL_API ?? 'http://127.0.0.1:4040'
+// The agent's own log, which is where a cloudflared quick tunnel announces its
+// hostname. Empty means "not available", and the cloudflare discovery then
+// simply finds nothing rather than failing.
+const TUNNEL_LOG = process.env.DSHGW_TUNNEL_LOG ?? ''
 const PUBLIC_URL_OVERRIDE = process.env.DSHGW_PUBLIC_URL ?? ''
 const URL_FILE = process.env.DSHGW_URL_FILE ?? ''
 
@@ -661,9 +665,80 @@ async function discoverNgrokUrl() {
 }
 
 /**
+ * Ask cloudflared's metrics server for a quick tunnel's hostname.
+ *
+ * The server lives on localhost:20241 and, when that is taken, steps through
+ * 20245 before falling back to a random port — the same shape as ngrok's, so
+ * the scan is the same. `/quicktunnel` answers `{"hostname":"<host>"}` with NO
+ * scheme: cloudflared adds the `https://` only for its human-facing banner. The
+ * scheme is therefore supplied here rather than assumed to be present.
+ *
+ * Only a quick tunnel populates this — a named tunnel leaves the field empty,
+ * and the response is `{"hostname":""}`, which is treated as "not found".
+ */
+async function fetchCloudflareQuickHostname() {
+  const base = Number(new URL(TUNNEL_API).port || '20241')
+  const candidates = Array.from({ length: 5 }, (_, index) => `http://127.0.0.1:${String(base + index)}`)
+  for (const candidate of candidates) {
+    try {
+      const response = await fetch(`${candidate}/quicktunnel`, { signal: AbortSignal.timeout(2000) })
+      if (!response.ok) continue
+      const body = await response.json()
+      const hostname = typeof body.hostname === 'string' ? body.hostname.trim() : ''
+      if (hostname !== '') {
+        log(`public URL: https://${hostname} (cloudflared metrics on port ${new URL(candidate).port})`)
+        return `https://${hostname}`
+      }
+    } catch {
+      // Not up yet, or not a quick tunnel — keep waiting.
+    }
+  }
+  return ''
+}
+
+/**
+ * Read the cloudflared quick tunnel's URL out of the agent's own log.
+ *
+ * A fallback for when the metrics server cannot be reached. cloudflared prints
+ * the hostname inside a box drawn with `|` and `+`, preceded by prose about the
+ * tunnel having been created. Matching the hostname rather than that prose is
+ * deliberate: the wording and the box are presentation and drift between
+ * releases, while the hostname is the thing being reported.
+ *
+ * A *named* (token) tunnel prints no hostname at all — Cloudflare already knows
+ * it, and the connector is never told — so this finds nothing there and the
+ * action supplies the URL instead.
+ */
+function readCloudflareUrlFromLog() {
+  if (TUNNEL_LOG === '') return ''
+  let text
+  try {
+    text = readFileSync(TUNNEL_LOG, 'utf8')
+  } catch {
+    // The agent has not written its log yet.
+    return ''
+  }
+  const match = /https:\/\/([a-z0-9][a-z0-9-]*\.trycloudflare\.com)/u.exec(text)
+  if (match === null) return ''
+  log(`public URL: https://${match[1]} (from the cloudflared log)`)
+  return `https://${match[1]}`
+}
+
+/**
+ * Discover a Cloudflare tunnel's public URL: the metrics API when it answers,
+ * and the agent's own log when it does not. Both are needed — the metrics
+ * server is exact but only exists for a quick tunnel, and the log is the only
+ * record that survives a port collision.
+ */
+async function discoverCloudflareUrl() {
+  const fromMetrics = await fetchCloudflareQuickHostname()
+  return fromMetrics !== '' ? fromMetrics : readCloudflareUrlFromLog()
+}
+
+/**
  * Resolve the public origin and record it. Explicit configuration wins; then
- * the running agent's local API, which is the only way to learn the URL of a
- * quick tunnel — the hostname is minted by Cloudflare at connect time and
+ * the running agent's local API or log, which is the only way to learn the URL
+ * of a quick tunnel — its hostname is minted by Cloudflare at connect time and
  * appears nowhere else; then nothing, and the caller prints a loopback URL and
  * says the tunnel is missing.
  */
@@ -671,7 +746,7 @@ async function publishUrl() {
   if (PUBLIC_URL_OVERRIDE !== '') {
     publicUrl = PUBLIC_URL_OVERRIDE.replace(/\/+$/u, '')
   } else {
-    const discover = { ngrok: discoverNgrokUrl }[TUNNEL]
+    const discover = { ngrok: discoverNgrokUrl, cloudflare: discoverCloudflareUrl }[TUNNEL]
     if (discover === undefined) {
       log(`no URL discovery for a '${TUNNEL}' tunnel; set DSHGW_PUBLIC_URL`)
       return

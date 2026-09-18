@@ -1,12 +1,12 @@
-name: 'Run DeepSeek Harness (ngrok)'
+name: 'Run DeepSeek Harness (Cloudflare Tunnel)'
 description: >-
-  Start an ephemeral DeepSeek Harness (dsh) web session and expose it through an
-  ngrok tunnel behind a password.
+  Start an ephemeral DeepSeek Harness (dsh) web session and expose it through a
+  Cloudflare Tunnel behind a password.
 author: 'shaowenchen'
 
 branding:
-  icon: 'terminal'
-  color: 'blue'
+  icon: 'cloud'
+  color: 'orange'
 
 inputs:
   api_key:
@@ -21,14 +21,16 @@ inputs:
     description: 'Password for the session link.'
     required: false
     default: ''
-  ngrok_token:
-    description: 'ngrok authtoken.'
+  cloudflare_token:
+    description: >-
+      Token of a Cloudflare tunnel. Empty starts a quick tunnel instead: a
+      random trycloudflare.com hostname with no account behind it.
     required: false
     default: ''
   public_url:
     description: >-
-      Public URL of the tunnel, overriding discovery. Usually unnecessary:
-      ngrok's own API reports the URL.
+      Public URL of the tunnel, overriding discovery. Required with a named
+      tunnel, which never learns its own hostname.
     required: false
     default: ''
   base_url:
@@ -73,27 +75,26 @@ runs:
       run: |
         set -euo pipefail
         [ -n "$DSH_VERSION" ] || { echo "::error::version is required"; exit 1; }
-        # base_url and model are independent: model has a default, so requiring
-        # one to accompany the other would make the common case fail.
 
-    - name: Install ngrok
-      if: inputs.ngrok_token != ''
+    - name: Install cloudflared
       shell: bash
       run: |
         set -euo pipefail
-        # Same distribution channel debugger-action uses; a single static binary.
-        url="https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz"
-        curl -fsSL "$url" | sudo tar -xz -C /usr/local/bin
-        sudo chmod +x /usr/local/bin/ngrok
-        ngrok --version
+        # The release's canonical "latest" asset, so the version cannot go
+        # stale the way a pinned one would — the same reason the dsh version
+        # dropdown offers `latest`. A single static binary, no package manager.
+        url="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64"
+        sudo curl -fsSL -o /usr/local/bin/cloudflared "$url"
+        sudo chmod +x /usr/local/bin/cloudflared
+        cloudflared --version
 
     - name: Start the session
       shell: bash
       env:
         # Which tunnel the shared script should open. Not an input: this action
-        # is the ngrok one, so the choice is fixed here rather than offered to
-        # the caller (the cloudflare/ action sets it to 'cloudflare').
-        DSH_TUNNEL: 'ngrok'
+        # is the Cloudflare one, so the choice is fixed here rather than offered
+        # to the caller (the ngrok/ action sets it to 'ngrok').
+        DSH_TUNNEL: 'cloudflare'
         DSH_VERSION: ${{ inputs.version }}
         DSH_API_KEY: ${{ inputs.api_key }}
         DSH_PASSWORD: ${{ inputs.password }}
@@ -103,5 +104,5 @@ runs:
         DSH_LOG_LEVEL: ${{ inputs.log_level }}
         DSH_EXTRA_ARGS: ${{ inputs.extra_args }}
         DSH_PUBLIC_URL: ${{ inputs.public_url }}
-        NGROK_TOKEN: ${{ inputs.ngrok_token }}
+        CLOUDFLARE_TOKEN: ${{ inputs.cloudflare_token }}
       run: bash "${{ github.action_path }}/../scripts/action.sh"
