@@ -44,7 +44,19 @@ const INNER_AUTHORITY = process.env.DSHGW_INNER_AUTHORITY ?? '127.0.0.1:13080'
 const INNER_HOST = INNER_AUTHORITY.slice(0, INNER_AUTHORITY.lastIndexOf(':')) || '127.0.0.1'
 const INNER_PORT = Number(INNER_AUTHORITY.slice(INNER_AUTHORITY.lastIndexOf(':') + 1))
 const PASSWORD = process.env.DSHGW_PASSWORD ?? ''
-const SESSION_HOURS = Number(process.env.DSHGW_SESSION_HOURS ?? '12')
+/**
+ * How long the session may run, in hours; exactly "0" means the caller asked
+ * for no limit.
+ *
+ * Anything that is not a non-negative number falls back to the default rather
+ * than to "unlimited": the permissive reading of a typo is a cookie that never
+ * expires, which is the one outcome a mistake must not produce. `Number('soon')`
+ * is `NaN`, and `NaN >= 0` is false, so the guard below catches it.
+ */
+const SESSION_HOURS_PARSED = Number(process.env.DSHGW_SESSION_HOURS ?? '12')
+const SESSION_HOURS = Number.isFinite(SESSION_HOURS_PARSED) && SESSION_HOURS_PARSED >= 0
+  ? SESSION_HOURS_PARSED
+  : 12
 // Which tunnel agent is in front, and the local API (if any) that can be asked
 // for the public URL. Discovery itself is a dispatch keyed by this name, so an
 // unsupported value is reported rather than silently leaving the session with
@@ -76,7 +88,15 @@ const HEALTH_PATH = '/__dshgw/health'
 
 /** Signing key for the gateway's own cookie; per-process, so a restart logs everyone out. */
 const SECRET = randomBytes(32)
-const SESSION_MS = Math.max(1, SESSION_HOURS) * 60 * 60 * 1000
+/**
+ * The gateway cookie's lifetime, matching the session's.
+ *
+ * `null` means the cookie carries no expiry of its own — the caller chose an
+ * unlimited session, so the cookie must not sign everyone out on a timer the
+ * session does not have. It is still bounded in practice: the job ends the
+ * session, and the process holding the signing key goes with it.
+ */
+const SESSION_MS = SESSION_HOURS > 0 ? SESSION_HOURS * 60 * 60 * 1000 : null
 const COOKIE_NAME = 'dshgw'
 
 /**
@@ -106,13 +126,26 @@ function sign(body) {
   return b64url(createHmac('sha256', SECRET).update(body).digest())
 }
 
-/** Mint one gateway session value: `v1.<payload>.<hmac>`, expiring after SESSION_MS. */
+/**
+ * Mint one gateway session value: `v1.<payload>.<hmac>`, expiring after
+ * SESSION_MS — or, when that is null, carrying no `exp` at all so verification
+ * does not expire it.
+ */
 function mintSession() {
-  const body = b64url(JSON.stringify({ exp: Date.now() + SESSION_MS }))
+  const payload = SESSION_MS === null ? {} : { exp: Date.now() + SESSION_MS }
+  const body = b64url(JSON.stringify(payload))
   return `v1.${body}.${sign(body)}`
 }
 
-/** Verify a gateway session value in constant time; returns false for anything malformed or expired. */
+/**
+ * Verify a gateway session value in constant time; returns false for anything
+ * malformed or expired.
+ *
+ * A payload with no `exp` is accepted only when this process is not enforcing
+ * one — an absent expiry must not become a way to outlive a bounded session.
+ * The signature still has to verify, so the payload cannot be forged either
+ * way.
+ */
 function verifySession(value) {
   const parts = value.split('.')
   const [version, body, mac] = parts
@@ -124,6 +157,7 @@ function verifySession(value) {
   if (!timingSafeEqual(actualBytes, expectedBytes)) return false
   try {
     const payload = JSON.parse(Buffer.from(body.replaceAll('-', '+').replaceAll('_', '/'), 'base64').toString('utf8'))
+    if (SESSION_MS === null) return typeof payload.exp !== 'number' ? true : payload.exp > Date.now()
     return typeof payload.exp === 'number' && payload.exp > Date.now()
   } catch {
     return false
@@ -154,7 +188,12 @@ function isSecureRequest(req) {
 }
 
 function sessionCookie(value, req, maxAgeSeconds) {
-  const attrs = [`${COOKIE_NAME}=${value}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${String(maxAgeSeconds)}`]
+  // No Max-Age when the session has no limit: the attribute is a timer, and
+  // omitting it makes this a session cookie that lasts until the browser closes
+  // — which is the closest a cookie can get to "no expiry of its own". `null`
+  // must not be stringified here, or the header would read `Max-Age=null`.
+  const attrs = [`${COOKIE_NAME}=${value}`, 'Path=/', 'HttpOnly', 'SameSite=Lax']
+  if (maxAgeSeconds !== null) attrs.push(`Max-Age=${String(maxAgeSeconds)}`)
   if (isSecureRequest(req)) attrs.push('Secure')
   return attrs.join('; ')
 }
@@ -341,7 +380,7 @@ async function handleLogin(req, res, url) {
   log(`login OK from ${ip}`)
   res.writeHead(303, {
     'location': next,
-    'set-cookie': sessionCookie(mintSession(), req, Math.floor(SESSION_MS / 1000)),
+    'set-cookie': sessionCookie(mintSession(), req, SESSION_MS === null ? null : Math.floor(SESSION_MS / 1000)),
     'cache-control': 'no-store',
     'referrer-policy': 'no-referrer',
   })

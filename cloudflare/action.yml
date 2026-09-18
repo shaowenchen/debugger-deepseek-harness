@@ -18,7 +18,7 @@ inputs:
     required: false
     default: '0.1.2-rc.1'
   password:
-    description: 'Password for signing in to the session.'
+    description: 'Password for signing in (required).'
     required: true
     default: ''
   cloudflare_token:
@@ -38,6 +38,12 @@ inputs:
       endpoint's own default model.
     required: false
     default: 'default'
+  session_hours:
+    description: >-
+      How long the session may run, in hours; empty or 0 means no self-imposed
+      limit (the job's own timeout still applies).
+    required: false
+    default: ''
   workspace_dir:
     description: >-
       The directory the session works in, and the one dsh runs from; defaults
@@ -94,6 +100,7 @@ runs:
         DSH_PASSWORD: ${{ inputs.password }}
         DSH_BASE_URL: ${{ inputs.base_url }}
         DSH_MODEL: ${{ inputs.model }}
+        DSH_SESSION_HOURS: ${{ inputs.session_hours }}
         DSH_WORKSPACE_DIR: ${{ inputs.workspace_dir }}
         DSH_LOG_LEVEL: ${{ inputs.log_level }}
         DSH_EXTRA_ARGS: ${{ inputs.extra_args }}

@@ -31,23 +31,37 @@ on:
       password:
         description: 'Password for signing in (blank = the PASSWORD secret)'
         type: string
-        # The password is printed in the run's Summary by design, so this field
-        # is not a new exposure — it lets one run use a different password
-        # without editing secrets, like `model` above. Blank falls through to
-        # secrets.PASSWORD; if that is unset too the action refuses to start.
+        # Blank falls through to secrets.PASSWORD; if that is unset too the
+        # action refuses to start rather than generating one.
         default: ''
+      session_hours:
+        description: 'Session duration'
+        type: choice
+        # Drives both the session's own deadline and this job's timeout, so the
+        # two cannot drift apart. `unlimited` is passed on as 0, which the
+        # action reads as "no self-imposed limit"; the job still ends at the
+        # runner's ceiling, since nothing here can outlive a GitHub-hosted job.
+        default: '1'
+        options:
+          - '1'
+          - '2'
+          - '4'
+          - 'unlimited'
       tunnel:
         description: 'Tunnel'
         type: choice
-        default: 'ngrok'
+        # Cloudflare by default: it needs no credential at all for a quick
+        # tunnel, so a run works out of the box. ngrok is still offered, but
+        # needs an NGROK_TOKEN to produce a link.
+        default: 'cloudflare'
         options:
-          - 'ngrok'
           # No account needed: Cloudflare mints a random trycloudflare.com
           # hostname. Set CLOUDFLARE_TOKEN to use a named tunnel instead — but
           # note a named tunnel's link cannot be discovered here (Cloudflare
           # never tells the connector its own hostname), so read it from the
           # dashboard rather than the run's Summary.
           - 'cloudflare'
+          - 'ngrok'
 
 permissions:
   contents: read
@@ -60,8 +74,19 @@ concurrency:
 jobs:
   dsh:
     runs-on: ubuntu-latest
-    # The session's lifetime.
-    timeout-minutes: 60
+    # A little longer than the session itself, so the script's own deadline
+    # fires first and its cleanup runs; this is the backstop, not the plan. The
+    # 20-minute margin covers setup (installing dsh) plus shutdown.
+    #
+    # `unlimited` asks for the runner's ceiling instead — 360 is the documented
+    # maximum for a GitHub-hosted job, so there is no headroom to add the margin
+    # to.
+    #
+    # Written as a comparison chain rather than arithmetic on the input:
+    # `timeout-minutes` allows the `inputs` context but no functions, so
+    # `fromJSON()` is not available here. Each arm is the session length plus
+    # the margin, spelled out.
+    timeout-minutes: ${{ inputs.session_hours == 'unlimited' && 360 || inputs.session_hours == '4' && 260 || inputs.session_hours == '2' && 140 || 80 }}
     steps:
       # Needed only because this workflow calls the action from the working
       # copy (`uses: ./`); the session itself uses a scratch workspace.
@@ -86,6 +111,9 @@ jobs:
           # chose.
           password: ${{ inputs.password != '' && inputs.password || secrets.PASSWORD }}
           version: ${{ inputs.version }}
+          # `unlimited` reaches the action as 0, which it reads as
+          # "no self-imposed limit".
+          session_hours: ${{ inputs.session_hours == 'unlimited' && '0' || inputs.session_hours }}
           base_url: ${{ secrets.BASE_URL }}
           # 'default' — the field's own default — means "no explicit choice",
           # so it falls through to the MODEL secret. Without this the field
@@ -108,6 +136,9 @@ jobs:
           # chose.
           password: ${{ inputs.password != '' && inputs.password || secrets.PASSWORD }}
           version: ${{ inputs.version }}
+          # `unlimited` reaches the action as 0, which it reads as
+          # "no self-imposed limit".
+          session_hours: ${{ inputs.session_hours == 'unlimited' && '0' || inputs.session_hours }}
           base_url: ${{ secrets.BASE_URL }}
           model: ${{ inputs.model == 'default' && secrets.MODEL || inputs.model }}
           # Blank means a quick tunnel: a random trycloudflare.com hostname with

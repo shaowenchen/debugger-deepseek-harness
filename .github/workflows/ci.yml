@@ -36,12 +36,19 @@ jobs:
           node --check scripts/settings.mjs
           node --check tests/gateway.e2e.mjs
           node --check tests/url-discovery.mjs
+          node --check tests/session-cookie.mjs
 
       - name: Public URL discovery
         # No dsh, no tunnel agent, no network: a stub API stands in for the
         # agent. This is the only check that runs the discovery code at all —
         # the end-to-end job sets DSHGW_PUBLIC_URL and so skips it.
         run: node tests/url-discovery.mjs
+
+      - name: Session cookie expiry
+        # Also no dsh and no network. Covers the unlimited-session branch the
+        # end-to-end job never reaches, and the rule that a malformed duration
+        # must fall back to a bounded cookie rather than an endless one.
+        run: node tests/session-cookie.mjs
 
       - name: The dsh home the script writes to is the one dsh reads
         # dsh resolves its home from $DSH_HOME and otherwise falls back to
@@ -244,6 +251,11 @@ jobs:
               'concurrency': {'github', 'inputs', 'vars'},
               'env': {'github', 'secrets', 'inputs', 'vars'},
           }
+          # A job key checked separately, because it lives one level down:
+          # `jobs.<id>.timeout-minutes` may read inputs but, unlike a step key,
+          # is not allowed to call functions — so `fromJSON()` there would be
+          # rejected only at run time, which is the worst place to find out.
+          JOB_KEYS = {'timeout-minutes': {'github', 'needs', 'strategy', 'matrix', 'vars', 'inputs'}}
           bad = []
           for path in glob.glob('.github/workflows/*.yml'):
               doc = yaml.safe_load(open(path))
@@ -254,6 +266,22 @@ jobs:
                   illegal = used - allowed
                   if illegal:
                       bad.append(f'{path}: {key} uses {sorted(illegal)}, allowed {sorted(allowed)}')
+              for job in (doc.get('jobs') or {}).values():
+                  if not isinstance(job, dict):
+                      continue
+                  for key, allowed in JOB_KEYS.items():
+                      if key not in job:
+                          continue
+                      value = str(job[key])
+                      used = set(re.findall(r'\b(github|secrets|inputs|vars|needs|matrix|env)\.', value))
+                      illegal = used - allowed
+                      if illegal:
+                          bad.append(f'{path}: jobs.*.{key} uses {sorted(illegal)}, allowed {sorted(allowed)}')
+                      # No functions available here, so an expression calling one
+                      # cannot be evaluated by GitHub.
+                      called = set(re.findall(r'\b([a-zA-Z]+)\(', value))
+                      if called:
+                          bad.append(f'{path}: jobs.*.{key} calls {sorted(called)}; no functions are allowed in this key')
           if bad:
               print('\n'.join(bad), file=sys.stderr)
               sys.exit(1)

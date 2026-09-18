@@ -7,8 +7,8 @@ Two actions live here, differing only in how the link is published:
 
 | Action | Tunnel | Needs |
 |---|---|---|
+| **[`cloudflare/`](cloudflare)** | Cloudflare Tunnel (default) | nothing — or a tunnel token for a stable hostname |
 | **[`ngrok/`](ngrok)** | ngrok | an [ngrok authtoken](https://dashboard.ngrok.com/get-started/your-authtoken) |
-| **[`cloudflare/`](cloudflare)** | Cloudflare Tunnel | nothing — or a tunnel token for a stable hostname |
 
 Everything else is the same: the same password gateway, the same `dsh`
 installation, the same inputs, the same session lifetime.
@@ -51,16 +51,17 @@ text any reader of the run can see.
 
 ## Quick start
 
-Add `API_KEY`, `PASSWORD`, and one tunnel's credential — `NGROK_TOKEN`, or
-nothing at all if you are using Cloudflare. Then: **Actions → DeepSeek Harness →
+Add `API_KEY` and `PASSWORD`. That is all — the default tunnel is Cloudflare,
+whose quick tunnel needs no account and no extra secret. (For ngrok instead, add
+`NGROK_TOKEN` and pick it from the form.) Then: **Actions → DeepSeek Harness →
 Run workflow**. Open the link from the run's **Summary**, type your password, and
 start working — the session opens on a ready workspace, so there is nothing to
 set up first.
 
-The session ends when you hit **Cancel workflow**, or when the job's
-`timeout-minutes` fires — there is no "duration" knob to set, because the job
-timeout already is one. Nothing survives the end of the run; the runner is
-discarded with the job.
+The session ends when you hit **Cancel workflow**, or when its duration runs out
+— pick 1, 2, 4 hours or *unlimited* on the form. One choice drives both the
+session's own deadline and the job's `timeout-minutes`, so they cannot disagree.
+Nothing survives the end of the run; the runner is discarded with the job.
 
 ## Model routing
 
@@ -112,7 +113,7 @@ gh workflow run dsh.yml -f model=some-other-model
 
 ## Using it from another repository
 
-Pick the action by its directory — `ngrok/` or `cloudflare/`:
+Pick the action by its directory — `cloudflare/` or `ngrok/`:
 
 ```yaml
 name: dsh
@@ -122,27 +123,30 @@ on:
 jobs:
   dsh:
     runs-on: ubuntu-latest
-    timeout-minutes: 60          # the session's lifetime
+    timeout-minutes: 80          # the session's lifetime + setup/shutdown
     steps:
       # No actions/checkout: the session gets its own scratch workspace, so
       # there is no need to fetch this repository first.
+      - uses: shaowenchen/debugger-deepseek-harness/cloudflare@main
+        with:
+          api_key: ${{ secrets.API_KEY }}
+          password: ${{ secrets.PASSWORD }}
+          base_url: ${{ secrets.BASE_URL }}   # omit for official DeepSeek
+          model: ${{ secrets.MODEL }}         # omit with base_url
+```
+
+That is a *quick* tunnel: no Cloudflare account, no extra secret. Add
+`cloudflare_token: ${{ secrets.CLOUDFLARE_TOKEN }}` to use a named tunnel
+instead — but note its link then comes from the dashboard, not the run.
+
+For ngrok instead, swap the reference and add its credential:
+
+```yaml
       - uses: shaowenchen/debugger-deepseek-harness/ngrok@main
         with:
           api_key: ${{ secrets.API_KEY }}
           password: ${{ secrets.PASSWORD }}
           ngrok_token: ${{ secrets.NGROK_TOKEN }}
-          base_url: ${{ secrets.BASE_URL }}   # omit for official DeepSeek
-          model: ${{ secrets.MODEL }}         # omit with base_url
-```
-
-For a Cloudflare tunnel instead, swap the reference and the credential:
-
-```yaml
-      - uses: shaowenchen/debugger-deepseek-harness/cloudflare@main
-        with:
-          api_key: ${{ secrets.API_KEY }}
-          password: ${{ secrets.PASSWORD }}
-          cloudflare_token: ${{ secrets.CLOUDFLARE_TOKEN }}  # omit for a quick tunnel
 ```
 
 To give the session the repository instead, check it out and point at it:
@@ -165,13 +169,13 @@ directory is the same empty place rather than the checkout. Point
 
 Both actions produce the same session; only the way in differs.
 
-| | ngrok | Cloudflare Tunnel |
+| | Cloudflare Tunnel | ngrok |
 |---|---|---|
-| Credential | `NGROK_TOKEN` (required) | none, or `CLOUDFLARE_TOKEN` |
-| Hostname | random `*.ngrok-free.app` | random `*.trycloudflare.com`, or your own |
-| Stable across runs | no (free tier) | yes, with a named tunnel |
-| Link printed in the run | yes | yes for a quick tunnel; **no** for a named one |
-| Link discovery | ngrok's own API | cloudflared's metrics API, then its log |
+| Credential | none, or `CLOUDFLARE_TOKEN` | `NGROK_TOKEN` (required) |
+| Hostname | random `*.trycloudflare.com`, or your own | random `*.ngrok-free.app` |
+| Stable across runs | yes, with a named tunnel | no (free tier) |
+| Link printed in the run | yes for a quick tunnel; **no** for a named one | yes |
+| Link discovery | cloudflared's metrics API, then its log | ngrok's own API |
 
 **Cloudflare, no account.** Leave `cloudflare_token` empty and a *quick tunnel*
 starts: Cloudflare mints a random `*.trycloudflare.com` hostname with no login,
@@ -275,10 +279,11 @@ simply ignored.
 | `api_key` | — | Model API key (**required**) |
 | `version` | `0.1.2-rc.1` | dsh version to install; `latest` or the pinned release |
 | `password` | — | Password guarding the link (**required**). Set it to your `PASSWORD` secret |
-| `ngrok_token` | — | ngrok authtoken (**required** for a public link, `ngrok/` only) |
+| `ngrok_token` | — | ngrok authtoken (**required** for a link, `ngrok/` only — the default tunnel is Cloudflare, which needs none) |
 | `cloudflare_token` | — | Cloudflare tunnel token; unset = a quick tunnel (`cloudflare/` only) |
 | `base_url` | — | Model API endpoint; empty = official DeepSeek |
 | `model` | `default` | Model id(s), comma-separated; the first is the default. An id may be `id\|name\|contextWindow\|maxTokens`. `default` keeps the endpoint's own default model |
+| `session_hours` | no limit | How long the session may run, in hours; `0` or empty means no self-imposed limit (the job's `timeout-minutes` still applies) |
 | `workspace_dir` | empty `workspace/` | The directory to work in; also where `dsh` runs from. A name resolves under the session home |
 | `extra_args` | — | Extra flags for the `dsh` command |
 | `log_level` | — | `debug` prints more detail |
@@ -327,10 +332,13 @@ simply ignored.
   That is the deliverable, so masking it would hide it from the very job summary
   that has to display it. Treat the run log the way you would treat the link.
   The API key *is* masked.
-- **There is no duration input.** A session lives until you cancel the run or
-  the job's `timeout-minutes` fires, which is the same thing GitHub already
-  measures. Set `timeout-minutes` on the job (60 by default in this repo's
-  workflow).
+- **Duration, and what "unlimited" can mean.** The form offers 1, 2, 4 hours or
+  *unlimited*, which sets both the session's own deadline and the job's
+  `timeout-minutes`. *Unlimited* asks for the runner's ceiling (360 minutes, the
+  documented maximum for a GitHub-hosted job) — nothing can outlive the runner,
+  so "unlimited" means "no self-imposed limit", not "forever". The action also
+  takes a `session_hours` input (0 = no limit) if you drive it from your own
+  workflow, where you set `timeout-minutes` yourself.
 - **One session at a time per repository** — sessions would claim the same
   gateway port, so the workflow keys its `concurrency` group to the repository
   and a second run queues.

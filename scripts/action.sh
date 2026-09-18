@@ -37,9 +37,15 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # under the session home.
 : "${DSH_WORKSPACE_DIR:=workspace}"
 : "${DSH_HOME_DIR:=$PWD/.dsh-session-home}"
-: "${DSH_SESSION_HOURS:=6}"
-# No session-length input: the job's own timeout-minutes is the deadline.
-: "${DSH_TIMEOUT_MINUTES:=360}"
+# How long the session may run, in hours, from the caller's `session_hours`
+# input; empty or 0 means no self-imposed limit.
+#
+# One number drives both things that expire, and they have to agree: the login
+# cookie's lifetime (the gateway's DSHGW_SESSION_HOURS) and this script's own
+# deadline below. Letting the cookie outlive the session would hand a browser a
+# session that is already over; letting it die first would sign the user out of
+# a session still running.
+: "${DSH_SESSION_HOURS:=0}"
 : "${DSH_PASSWORD:=}"
 : "${DSH_API_KEY:=}"
 : "${DSH_BASE_URL:=}"
@@ -49,7 +55,11 @@ SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 # Which tunnel agent to open. Each action sets this to its own name; there is no
 # "none" value, because an action that offers no tunnel would just be this one
 # with its credential left blank, which already prints a working loopback URL.
-: "${DSH_TUNNEL:=ngrok}"
+#
+# The default matches the one the workflow offers, so a direct invocation of
+# this script behaves like the documented default rather than contradicting it:
+# cloudflare, whose quick tunnel needs no credential.
+: "${DSH_TUNNEL:=cloudflare}"
 : "${NGROK_TOKEN:=}"
 : "${CLOUDFLARE_TOKEN:=}"
 
@@ -117,7 +127,17 @@ fi
 # Credentials must never reach the log, including through a failing command.
 echo "::add-mask::${DSH_API_KEY}"
 
-DEADLINE=$(( $(date +%s) + DSH_TIMEOUT_MINUTES * 60 ))
+# The session's own deadline, in seconds. 0 (or an unparseable value) means no
+# self-imposed limit: the job's `timeout-minutes` is then the only bound, which
+# is what "no limit" can mean on a runner that kills the job regardless.
+#
+# A non-numeric input is treated as "no limit" rather than killing the run: the
+# value arrives from a workflow input, and a typo should not be fatal when the
+# safe reading is available.
+DEADLINE=0
+if [[ "$DSH_SESSION_HOURS" =~ ^[0-9]+$ ]] && [ "$DSH_SESSION_HOURS" -gt 0 ]; then
+  DEADLINE=$(( $(date +%s) + DSH_SESSION_HOURS * 3600 ))
+fi
 log "dsh ${DSH_VERSION}"
 log "model: $MODEL_TEXT"
 
@@ -534,8 +554,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
-log "session running; it ends at the job timeout or when the workflow is cancelled"
-while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+if [ "$DEADLINE" -gt 0 ]; then
+  log "session running; it ends at the ${DSH_SESSION_HOURS}h limit, the job timeout, or when the workflow is cancelled"
+else
+  log "session running with no self-imposed limit; it ends at the job timeout or when the workflow is cancelled"
+fi
+# A DEADLINE of 0 means "no self-imposed limit": the loop then runs until the
+# dsh process dies or the job is cancelled, which is the only kind of "no limit"
+# a runner that kills the job anyway can offer.
+while [ "$DEADLINE" -eq 0 ] || [ "$(date +%s)" -lt "$DEADLINE" ]; do
   if ! kill -0 "$(cat "$RUNTIME_DIR/dsh.pid" 2>/dev/null)" 2>/dev/null; then
     warn "the dsh runner stopped; see the [dsh] lines above"
     break
