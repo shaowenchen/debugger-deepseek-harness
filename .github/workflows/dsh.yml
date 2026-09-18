@@ -9,6 +9,19 @@ name: DeepSeek Harness
 on:
   workflow_dispatch:
     inputs:
+      session_hours:
+        description: 'Duration(h)'
+        type: choice
+        # Drives both the session's own deadline and this job's timeout, so the
+        # two cannot drift apart. `unlimited` is passed on as 0, which the
+        # action reads as "no self-imposed limit"; the job still ends at the
+        # runner's ceiling, since nothing here can outlive a GitHub-hosted job.
+        default: '1'
+        options:
+          - '1'
+          - '2'
+          - '4'
+          - 'unlimited'
       # All optional: leave one blank and the secret of the same name is used.
       # None of these is a credential — the API key and password are secrets
       # only, because a workflow input is plain text any reader of the run sees.
@@ -34,19 +47,6 @@ on:
         # Blank falls through to secrets.PASSWORD; if that is unset too the
         # action refuses to start rather than generating one.
         default: ''
-      session_hours:
-        description: 'Duration(h)'
-        type: choice
-        # Drives both the session's own deadline and this job's timeout, so the
-        # two cannot drift apart. `unlimited` is passed on as 0, which the
-        # action reads as "no self-imposed limit"; the job still ends at the
-        # runner's ceiling, since nothing here can outlive a GitHub-hosted job.
-        default: '1'
-        options:
-          - '1'
-          - '2'
-          - '4'
-          - 'unlimited'
       tunnel:
         description: 'Tunnel'
         type: choice
