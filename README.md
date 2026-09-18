@@ -123,7 +123,7 @@ on:
 jobs:
   dsh:
     runs-on: ubuntu-latest
-    timeout-minutes: 80          # the session's lifetime + setup/shutdown
+    timeout-minutes: 260         # 4h session + setup/shutdown (see session_hours)
     steps:
       # No actions/checkout: the session gets its own scratch workspace, so
       # there is no need to fetch this repository first.
@@ -332,13 +332,13 @@ simply ignored.
   That is the deliverable, so masking it would hide it from the very job summary
   that has to display it. Treat the run log the way you would treat the link.
   The API key *is* masked.
-- **Duration, and what "unlimited" can mean.** The form offers 1, 2, 4 hours or
-  *unlimited*, which sets both the session's own deadline and the job's
-  `timeout-minutes`. *Unlimited* asks for the runner's ceiling (360 minutes, the
-  documented maximum for a GitHub-hosted job) — nothing can outlive the runner,
-  so "unlimited" means "no self-imposed limit", not "forever". The action also
-  takes a `session_hours` input (0 = no limit) if you drive it from your own
-  workflow, where you set `timeout-minutes` yourself.
+- **Duration, and what "unlimited" can mean.** The form offers 1, 2, 4 hours
+  (4 by default) or *unlimited*, which sets both the session's own deadline and
+  the job's `timeout-minutes`. *Unlimited* asks for the runner's ceiling (360
+  minutes, the documented maximum for a GitHub-hosted job), because nothing can
+  outlive the runner — so it means "no self-imposed limit", not "forever". The
+  action also takes a `session_hours` input (0 = no limit) if you drive it from
+  your own workflow, where you set `timeout-minutes` yourself.
 - **One session at a time per repository** — sessions would claim the same
   gateway port, so the workflow keys its `concurrency` group to the repository
   and a second run queues.

@@ -16,7 +16,7 @@ on:
         # two cannot drift apart. `unlimited` is passed on as 0, which the
         # action reads as "no self-imposed limit"; the job still ends at the
         # runner's ceiling, since nothing here can outlive a GitHub-hosted job.
-        default: '1'
+        default: '4'
         options:
           - '1'
           - '2'
@@ -26,7 +26,7 @@ on:
       # None of these is a credential — the API key and password are secrets
       # only, because a workflow input is plain text any reader of the run sees.
       version:
-        description: 'dsh version'
+        description: 'Version'
         type: choice
         default: '0.1.2-rc.1'
         options:
