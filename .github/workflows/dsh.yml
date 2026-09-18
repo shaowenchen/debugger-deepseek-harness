@@ -29,13 +29,13 @@ on:
         # below rather than overriding it.
         default: 'default'
       password:
-        description: 'Password for signing in (blank = the PASSWORD secret)'
+        description: 'Password(Option)'
         type: string
         # Blank falls through to secrets.PASSWORD; if that is unset too the
         # action refuses to start rather than generating one.
         default: ''
       session_hours:
-        description: 'Session duration'
+        description: 'Duration(h)'
         type: choice
         # Drives both the session's own deadline and this job's timeout, so the
         # two cannot drift apart. `unlimited` is passed on as 0, which the
