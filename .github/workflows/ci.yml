@@ -251,10 +251,15 @@ jobs:
               'concurrency': {'github', 'inputs', 'vars'},
               'env': {'github', 'secrets', 'inputs', 'vars'},
           }
-          # A job key checked separately, because it lives one level down:
-          # `jobs.<id>.timeout-minutes` may read inputs but, unlike a step key,
-          # is not allowed to call functions — so `fromJSON()` there would be
-          # rejected only at run time, which is the worst place to find out.
+          # A job key checked separately because it lives one level down. Its
+          # context list is narrower than a step's, and only the contexts are
+          # checked here: functions are NOT restricted for this key. GitHub's
+          # table says "Special functions: None" for it, which reads like a ban
+          # but is not one — the same table's preamble states that unless a
+          # function is listed as restricted, it "can be used anywhere", and the
+          # only ever-restricted ones are hashFiles and the status checks.
+          # Asserting a ban here would reject the documented
+          # `fromJSON(inputs.hours)` form.
           JOB_KEYS = {'timeout-minutes': {'github', 'needs', 'strategy', 'matrix', 'vars', 'inputs'}}
           bad = []
           for path in glob.glob('.github/workflows/*.yml'):
@@ -277,11 +282,6 @@ jobs:
                       illegal = used - allowed
                       if illegal:
                           bad.append(f'{path}: jobs.*.{key} uses {sorted(illegal)}, allowed {sorted(allowed)}')
-                      # No functions available here, so an expression calling one
-                      # cannot be evaluated by GitHub.
-                      called = set(re.findall(r'\b([a-zA-Z]+)\(', value))
-                      if called:
-                          bad.append(f'{path}: jobs.*.{key} calls {sorted(called)}; no functions are allowed in this key')
           if bad:
               print('\n'.join(bad), file=sys.stderr)
               sys.exit(1)

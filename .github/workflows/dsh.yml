@@ -83,14 +83,16 @@ jobs:
     # fires first and its cleanup runs; this is the backstop, not the plan. The
     # 20-minute margin covers setup (installing dsh) plus shutdown.
     #
-    # `unlimited` asks for the runner's ceiling instead — 360 is the documented
-    # maximum for a GitHub-hosted job, so there is no headroom to add the margin
-    # to.
+    # `unlimited` asks for the runner's ceiling instead: GitHub-hosted jobs are
+    # capped at 6 hours (360 minutes) of execution time, so there is no headroom
+    # to add the margin to.
     #
-    # Written as a comparison chain rather than arithmetic on the input:
-    # `timeout-minutes` allows the `inputs` context but no functions, so
-    # `fromJSON()` is not available here. Each arm is the session length plus
-    # the margin, spelled out.
+    # Written as a comparison chain rather than
+    # `unlimited && 360 || fromJSON(session_hours) * 60 + 20`, which is shorter
+    # and would work *if* GitHub short-circuits `&&`. `fromJSON('unlimited')` is
+    # not valid JSON, so if the evaluator reaches it the whole workflow fails to
+    # start — a severe outcome to bet on undocumented behaviour for. Every
+    # operand here is a literal, so nothing is evaluated speculatively.
     timeout-minutes: ${{ inputs.session_hours == 'unlimited' && 360 || inputs.session_hours == '4' && 260 || inputs.session_hours == '2' && 140 || 80 }}
     steps:
       # Needed only because this workflow calls the action from the working
