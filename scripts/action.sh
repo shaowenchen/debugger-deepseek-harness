@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # Start one ephemeral DeepSeek Harness session natively on the runner — no
-# container — and expose it through an ngrok tunnel behind a password.
+# container — and expose it through a tunnel behind a password.
+#
+# This script is shared by both actions in this repository (ngrok/action.yml and
+# cloudflare/action.yml). They differ only in which tunnel agent they install
+# and point at the gateway; everything else — installing dsh, the password
+# gateway, the workspace, the session lifetime — is identical, so it lives here
+# once and the actions pick a tunnel through DSH_TUNNEL.
 #
 # dsh is installed with npm and run directly, so the version is chosen by the
 # caller and nothing needs an image. The password gateway (scripts/gateway.mjs)
@@ -13,6 +19,14 @@
 # owns what the image's entrypoint used to: restarting dsh when it exits (a
 # plugin install ends the process) and writing the model settings dsh reads.
 set -euo pipefail
+
+# The shared scripts live here, not beside whichever action.yml invoked us: the
+# actions live in their own subdirectories (ngrok/, cloudflare/) and both use
+# this one scripts/ tree. Resolved from this file's own location, so it is
+# correct however the actions are checked out — and, unlike $GITHUB_ACTION_PATH,
+# it needs no plumbing through each action's env block, where a missing entry
+# would silently send the helpers to the wrong directory.
+SCRIPT_DIR=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 : "${DSH_VERSION:=0.1.2-rc.1}"
 : "${DSH_PORT:=13080}"
@@ -32,10 +46,18 @@ set -euo pipefail
 : "${DSH_MODEL:=default}"
 : "${DSH_LOG_LEVEL:=}"
 : "${DSH_EXTRA_ARGS:=}"
+# Which tunnel agent to open. Each action sets this to its own name; there is no
+# "none" value, because an action that offers no tunnel would just be this one
+# with its credential left blank, which already prints a working loopback URL.
+: "${DSH_TUNNEL:=ngrok}"
 : "${NGROK_TOKEN:=}"
 
 GATEWAY_PORT=3080
+# ngrok's inspection API port; the gateway needs it to learn the public URL.
+# cloudflared's equivalent is set in its own branch, since it only exists when
+# that agent runs.
 NGROK_API_PORT=4040
+TUNNEL_API="http://127.0.0.1:${NGROK_API_PORT}"
 RUNTIME_DIR="$PWD/.dsh-session"
 URL_FILE="$RUNTIME_DIR/url.txt"
 GATEWAY_LOG="$RUNTIME_DIR/gateway.log"
@@ -122,43 +144,66 @@ export PATH="$NPM_PREFIX/bin:$PATH"
 command -v dsh >/dev/null || die "dsh was installed but is not on PATH"
 log "installed: $(dsh --version 2>/dev/null || echo "$DSH_VERSION")"
 
-# ── 3. ngrok ────────────────────────────────────────────────────────────────
+# ── 3. the tunnel ───────────────────────────────────────────────────────────
+#
+# Which agent runs is the only real difference between the two actions, so it is
+# a dispatch here rather than a second copy of this whole script. Both branches
+# end in the same three things: mirror the agent's output into the job log,
+# confirm it survived startup, and leave a pidfile for cleanup.
 
-if [ -n "$NGROK_TOKEN" ]; then
+TUNNEL_LOG="$RUNTIME_DIR/tunnel.log"
+tunnel_pid=""
+tunnel_name="$DSH_TUNNEL"
+
+# The agent's own output is mirrored into the job log, not just left in a file:
+# when a tunnel fails, its reason is the only thing that explains why, and a
+# file nobody prints hides exactly that. Tailing the file (rather than piping
+# the process) keeps the pidfile pointing at the agent itself, so cleanup stops
+# the agent rather than the `tail`. `-u` because the job log is not a tty:
+# without it sed block-buffers and the agent's output arrives in bursts instead
+# of as it happens, which is the opposite of what mirroring it is for.
+mirror_tunnel_log() {
+  for _ in $(seq 1 50); do [ -f "$TUNNEL_LOG" ] && break; sleep 0.1; done
+  tail -f "$TUNNEL_LOG" 2>/dev/null | sed -u "s/^/[${tunnel_name}] /" &
+  echo $! > "$RUNTIME_DIR/tunnellog.pid"
+}
+
+# A usage error makes an agent exit instantly, and without this check the only
+# symptom is a missing link minutes later.
+confirm_tunnel_alive() {
+  sleep 3
+  if ! kill -0 "$tunnel_pid" 2>/dev/null; then
+    sed 's/^/    /' "$TUNNEL_LOG" 2>/dev/null || true
+    die "the ${tunnel_name} agent exited during startup; its output is above"
+  fi
+}
+
+start_ngrok_tunnel() {
+  if [ -z "$NGROK_TOKEN" ]; then
+    warn "no ngrok_token given — serving on 127.0.0.1:${GATEWAY_PORT} only, with no public link"
+    return 0
+  fi
+
   log "opening the ngrok tunnel (https -> 127.0.0.1:${GATEWAY_PORT})"
-  ngrok config add-authtoken "$NGROK_TOKEN" >"$RUNTIME_DIR/ngrok.log" 2>&1 \
-    || { sed 's/^/    /' "$RUNTIME_DIR/ngrok.log" 2>/dev/null || true
+  ngrok config add-authtoken "$NGROK_TOKEN" >"$TUNNEL_LOG" 2>&1 \
+    || { sed 's/^/    /' "$TUNNEL_LOG" 2>/dev/null || true
          die "ngrok rejected the authtoken; check the NGROK_TOKEN secret"; }
 
   # `ngrok http <port>`: the port is a positional argument. It is not an
   # `--addr` flag — passing one made the agent exit with a usage error before
   # any tunnel existed, which is why the link never appeared.
-  ngrok http "$GATEWAY_PORT" >"$RUNTIME_DIR/ngrok.log" 2>&1 &
-  ngrok_pid=$!
-  echo $ngrok_pid > "$RUNTIME_DIR/ngrok.pid"
+  ngrok http "$GATEWAY_PORT" >>"$TUNNEL_LOG" 2>&1 &
+  tunnel_pid=$!
+  echo "$tunnel_pid" > "$RUNTIME_DIR/tunnel.pid"
 
-  # The agent's own output is mirrored into the job log, not just left in a
-  # file: when a tunnel fails, its reason is the only thing that explains why,
-  # and a file nobody prints hides exactly that. Tailing the file (rather than
-  # piping the process) keeps ngrok.pid pointing at ngrok, so cleanup stops it.
-  # `tail -f` needs the file to exist, and the shell creates it a moment later.
-  for _ in $(seq 1 50); do [ -f "$RUNTIME_DIR/ngrok.log" ] && break; sleep 0.1; done
-  # `-u` because the job log is not a tty: without it sed block-buffers and the
-  # agent's output arrives in bursts instead of as it happens, which is the
-  # opposite of what mirroring it is for.
-  tail -f "$RUNTIME_DIR/ngrok.log" 2>/dev/null | sed -u 's/^/[ngrok] /' &
-  echo $! > "$RUNTIME_DIR/ngroklog.pid"
+  mirror_tunnel_log
+  confirm_tunnel_alive
+}
 
-  # A usage error makes the agent exit instantly, and without this check the
-  # only symptom is a missing link minutes later. Confirm it survived startup.
-  sleep 3
-  if ! kill -0 "$ngrok_pid" 2>/dev/null; then
-    sed 's/^/    /' "$RUNTIME_DIR/ngrok.log" 2>/dev/null || true
-    die "the ngrok agent exited during startup; its output is above"
-  fi
-else
-  warn "no ngrok_token given — serving on 127.0.0.1:${GATEWAY_PORT} only, with no public link"
-fi
+case "$DSH_TUNNEL" in
+  ngrok)      start_ngrok_tunnel ;;
+  *)          die "unknown DSH_TUNNEL '${DSH_TUNNEL}'; expected 'ngrok' or 'cloudflare'" ;;
+esac
 
 # ── 4. model settings ───────────────────────────────────────────────────────
 
@@ -172,7 +217,7 @@ fi
 # pinning a model id this action would then have to track.
 mkdir -p "$DSH_HOME"
 DSH_API_KEY="$DSH_API_KEY" DSH_BASE_URL="$DSH_BASE_URL" DSH_MODEL="$DSH_MODEL" \
-DSH_HOME="$DSH_HOME" node "$GITHUB_ACTION_PATH/scripts/settings.mjs" \
+DSH_HOME="$DSH_HOME" node "$SCRIPT_DIR/settings.mjs" \
   || die "could not write the model configuration to $DSH_HOME/settings.yaml"
 
 # The credential travels in the environment variable each route's provider
@@ -295,9 +340,10 @@ DSHGW_LISTEN_PORT="$GATEWAY_PORT" \
 DSHGW_INNER_AUTHORITY="127.0.0.1:${DSH_PORT}" \
 DSHGW_PASSWORD="$DSH_PASSWORD" \
 DSHGW_SESSION_HOURS="$DSH_SESSION_HOURS" \
-DSHGW_NGROK_API="http://127.0.0.1:${NGROK_API_PORT}" \
+DSHGW_TUNNEL="$DSH_TUNNEL" \
+DSHGW_TUNNEL_API="$TUNNEL_API" \
 DSHGW_URL_FILE="$URL_FILE" \
-  node "$GITHUB_ACTION_PATH/scripts/gateway.mjs" \
+  node "$SCRIPT_DIR/gateway.mjs" \
     < <(tail -f -n +1 "$DSH_LOG" 2>/dev/null) \
     >"$GATEWAY_LOG" 2>&1 &
 echo $! > "$RUNTIME_DIR/gateway.pid"
@@ -373,18 +419,19 @@ if [ -n "$public_url" ]; then
   log "session ready: ${public_url}"
 else
   warn "the tunnel never reported a public URL; the session is up on 127.0.0.1:${GATEWAY_PORT}"
-  # The reason is in one of these two logs, and neither is much use unread.
-  if [ -f "$RUNTIME_DIR/ngrok.log" ]; then
-    warn "ngrok said:"
-    tail -n 20 "$RUNTIME_DIR/ngrok.log" | sed 's/^/    /'
+  # The reason is in the agent's log, and it is no use unread.
+  if [ -f "$TUNNEL_LOG" ]; then
+    warn "${tunnel_name} said:"
+    tail -n 20 "$TUNNEL_LOG" | sed 's/^/    /'
   else
-    # No log at all means the agent never even started.
-    warn "ngrok produced no output; is the NGROK_TOKEN secret set?"
+    # No log at all means the agent never even started, which for both agents
+    # means this action's credential input was left blank.
+    warn "${tunnel_name} produced no output; was its token input set?"
   fi
-  if kill -0 "$(cat "$RUNTIME_DIR/ngrok.pid" 2>/dev/null)" 2>/dev/null; then
-    warn "the ngrok agent is still running, so the tunnel exists but its local API did not answer on ${NGROK_API_PORT}"
+  if [ -n "$tunnel_pid" ] && kill -0 "$tunnel_pid" 2>/dev/null; then
+    warn "the ${tunnel_name} agent is still running, so the tunnel exists but its local API did not answer on ${TUNNEL_API}"
   else
-    warn "the ngrok agent has exited — see its output above for why"
+    warn "the ${tunnel_name} agent is not running — see its output above for why"
   fi
 fi
 
@@ -394,7 +441,7 @@ DSHGW_VERSION_TEXT="$DSH_VERSION" \
 DSHGW_WORKSPACE="$WS_PATH" \
 DSHGW_FALLBACK_URL="http://127.0.0.1:${GATEWAY_PORT}" \
 DSHGW_URL_FILE="$URL_FILE" \
-  "$GITHUB_ACTION_PATH/scripts/session-summary.sh"
+  "$SCRIPT_DIR/session-summary.sh"
 
 echo
 echo "======================================================================"
@@ -413,7 +460,7 @@ echo
 
 cleanup() {
   log "ending the session"
-  for pidfile in gateway.pid gatewaylog.pid ngrok.pid ngroklog.pid dsh.pid; do
+  for pidfile in gateway.pid gatewaylog.pid tunnel.pid tunnellog.pid dsh.pid; do
     [ -f "$RUNTIME_DIR/$pidfile" ] && kill "$(cat "$RUNTIME_DIR/$pidfile")" 2>/dev/null || true
   done
   # The dsh loop's own children outlive the loop's pid; kill the process group

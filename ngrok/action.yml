@@ -1,4 +1,4 @@
-name: 'Run DeepSeek Harness'
+name: 'Run DeepSeek Harness (ngrok)'
 description: >-
   Start an ephemeral DeepSeek Harness (dsh) web session and expose it through an
   ngrok tunnel behind a password.
@@ -84,7 +84,10 @@ runs:
     - name: Start the session
       shell: bash
       env:
-        GITHUB_ACTION_PATH: ${{ github.action_path }}
+        # Which tunnel the shared script should open. Not an input: this action
+        # is the ngrok one, so the choice is fixed here rather than offered to
+        # the caller (the cloudflare/ action sets it to 'cloudflare').
+        DSH_TUNNEL: 'ngrok'
         DSH_VERSION: ${{ inputs.version }}
         DSH_API_KEY: ${{ inputs.api_key }}
         DSH_PASSWORD: ${{ inputs.password }}
@@ -94,4 +97,4 @@ runs:
         DSH_LOG_LEVEL: ${{ inputs.log_level }}
         DSH_EXTRA_ARGS: ${{ inputs.extra_args }}
         NGROK_TOKEN: ${{ inputs.ngrok_token }}
-      run: bash "$GITHUB_ACTION_PATH/scripts/action.sh"
+      run: bash "${{ github.action_path }}/../scripts/action.sh"

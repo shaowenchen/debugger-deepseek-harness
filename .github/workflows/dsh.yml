@@ -28,6 +28,15 @@ on:
         # the form is never blank, and it falls through to the MODEL secret
         # below rather than overriding it.
         default: 'default'
+      tunnel:
+        description: 'Tunnel'
+        type: choice
+        default: 'ngrok'
+        options:
+          - 'ngrok'
+          # No account needed: Cloudflare mints a random trycloudflare.com
+          # hostname. Set CLOUDFLARE_TOKEN to use a named tunnel instead.
+          - 'cloudflare'
 
 permissions:
   contents: read
@@ -47,7 +56,15 @@ jobs:
       # copy (`uses: ./`); the session itself uses a scratch workspace.
       - uses: actions/checkout@v4
 
-      - uses: ./
+      # Two steps, not one: `uses:` takes a literal path — expressions are not
+      # allowed there — so the tunnel chosen on the form cannot select the
+      # action directory. Exactly one of these runs.
+      #
+      # The `with:` block is repeated rather than anchored because the two
+      # actions declare the same inputs and a YAML anchor here would save ten
+      # lines at the cost of making the form's mapping harder to read.
+      - if: inputs.tunnel == 'ngrok'
+        uses: ./ngrok
         with:
           # Credentials are secrets only. base_url comes from its secret too:
           # it is set once and rarely changed, so it needs no form field.
@@ -65,3 +82,15 @@ jobs:
           # workspace_dir is left to the action's default — a fresh, empty
           # workspace/ directory, which is also where dsh itself runs from — so
           # it needs no form field.
+
+      - if: inputs.tunnel == 'cloudflare'
+        uses: ./cloudflare
+        with:
+          api_key: ${{ secrets.API_KEY }}
+          password: ${{ secrets.PASSWORD }}
+          version: ${{ inputs.version }}
+          base_url: ${{ secrets.BASE_URL }}
+          model: ${{ inputs.model == 'default' && secrets.MODEL || inputs.model }}
+          # Blank means a quick tunnel: a random trycloudflare.com hostname with
+          # no account behind it. Set the secret to use a named tunnel.
+          cloudflare_token: ${{ secrets.CLOUDFLARE_TOKEN }}

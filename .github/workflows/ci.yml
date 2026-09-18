@@ -116,40 +116,87 @@ jobs:
           python3 - <<'PY'
           import glob, sys, yaml
           ok = True
-          for path in ['action.yml', *glob.glob('.github/workflows/*.yml')]:
-              try:
-                  yaml.safe_load(open(path))
-                  print(f'{path}: ok')
-              except Exception as exc:
-                  print(f'{path}: {exc}', file=sys.stderr)
-                  ok = False
+          for path in ['*/action.yml', *glob.glob('.github/workflows/*.yml')]:
+              for match in sorted(glob.glob(path)):
+                  try:
+                      yaml.safe_load(open(match))
+                      print(f'{match}: ok')
+                  except Exception as exc:
+                      print(f'{match}: {exc}', file=sys.stderr)
+                      ok = False
           sys.exit(0 if ok else 1)
           PY
 
       - name: action.yml declares what the script reads
-        # The composite action passes every input to action.sh as an environment
-        # variable. A typo here means an input that silently does nothing, which
-        # is exactly the kind of bug a run only reveals an hour later.
+        # Each action passes every input to the shared action.sh as an
+        # environment variable. A typo here means an input that silently does
+        # nothing, which is exactly the kind of bug a run only reveals an hour
+        # later.
         run: |
           set -eux
           python3 - <<'PY'
-          import re, yaml, sys
-          action = yaml.safe_load(open('action.yml'))
-          declared = set(action['inputs'])
-          step = next(s for s in action['runs']['steps'] if 'action.sh' in str(s.get('run', '')))
-          passed = set()
-          for name, value in step['env'].items():
-              m = re.fullmatch(r'\$\{\{\s*inputs\.([a-z0-9_]+)\s*\}\}', str(value))
-              if m:
-                  passed.add(m.group(1))
-          content = open('scripts/action.sh').read()
-          # Every declared input must reach the script, or be consumed by the
-          # action's own steps (e.g. setup-node) instead.
-          missing = declared - passed
-          if missing:
-              print(f'action.yml inputs never passed to the script: {sorted(missing)}', file=sys.stderr)
+          import glob, re, yaml, sys
+          problems = []
+          for path in sorted(glob.glob('*/action.yml')):
+              action = yaml.safe_load(open(path))
+              declared = set(action['inputs'])
+              steps = [s for s in action['runs']['steps'] if 'action.sh' in str(s.get('run', ''))]
+              if len(steps) != 1:
+                  problems.append(f'{path}: expected exactly one step running action.sh, found {len(steps)}')
+                  continue
+              passed = set()
+              for name, value in steps[0]['env'].items():
+                  m = re.fullmatch(r'\$\{\{\s*inputs\.([a-z0-9_]+)\s*\}\}', str(value))
+                  if m:
+                      passed.add(m.group(1))
+              # Every declared input must reach the script, or be consumed by the
+              # action's own steps (e.g. setup-node) instead.
+              missing = declared - passed
+              if missing:
+                  problems.append(f'{path}: inputs never passed to the script: {sorted(missing)}')
+              print(f'{path}: {len(declared)} inputs declared, all forwarded')
+          if problems:
+              print('\n'.join(problems), file=sys.stderr)
               sys.exit(1)
-          print(f'{len(declared)} inputs declared, all forwarded')
+          PY
+
+      - name: Each action picks a tunnel the script knows
+        # The actions are thin wrappers whose only real difference is DSH_TUNNEL,
+        # so a name the script's dispatch does not handle would leave that action
+        # starting no tunnel at all — a failure that only shows up as a missing
+        # link in a real run.
+        run: |
+          set -eux
+          python3 - <<'PY'
+          import glob, re, sys, yaml
+          script = open('scripts/action.sh').read()
+          known = set(re.findall(r'^  ([a-z]+)\)\s+start_\w+_tunnel', script, re.M))
+          if not known:
+              print('could not find the DSH_TUNNEL dispatch in scripts/action.sh', file=sys.stderr)
+              sys.exit(1)
+          problems = []
+          seen = set()
+          for path in sorted(glob.glob('*/action.yml')):
+              action = yaml.safe_load(open(path))
+              picks = {str((step.get('env') or {})['DSH_TUNNEL'])
+                       for step in action['runs']['steps']
+                       if 'DSH_TUNNEL' in (step.get('env') or {})}
+              if len(picks) != 1:
+                  problems.append(f'{path}: expected exactly one DSH_TUNNEL, found {sorted(picks)}')
+                  continue
+              unknown = picks - known
+              if unknown:
+                  problems.append(f'{path}: unknown tunnel(s) {sorted(unknown)}, script handles {sorted(known)}')
+              seen |= picks
+          # Both tunnels must be reachable through some action, or one of them is
+          # dead code that CI never exercises.
+          unused = known - seen
+          if unused:
+              problems.append(f'scripts/action.sh handles tunnels no action selects: {sorted(unused)}')
+          if problems:
+              print('\n'.join(problems), file=sys.stderr)
+              sys.exit(1)
+          print(f'each action selects one of {sorted(known)}')
           PY
 
       - name: The version dropdown matches what CI tests
@@ -164,6 +211,9 @@ jobs:
           # the dispatch inputs live under True, not under the string 'on'.
           def on_block(doc):
               return doc.get('on', doc.get(True))
+          # Read from the workflow's own dispatch form, not from an action: the
+          # form is what a user picks from, and it currently drives the ngrok
+          # action only.
           offer = set(on_block(yaml.safe_load(open('.github/workflows/dsh.yml')))['workflow_dispatch']['inputs']['version']['options'])
           ci = yaml.safe_load(open('.github/workflows/ci.yml'))
           tested = set(ci['jobs']['gateway']['strategy']['matrix']['dsh'])

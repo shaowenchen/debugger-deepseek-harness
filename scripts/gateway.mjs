@@ -45,7 +45,12 @@ const INNER_HOST = INNER_AUTHORITY.slice(0, INNER_AUTHORITY.lastIndexOf(':')) ||
 const INNER_PORT = Number(INNER_AUTHORITY.slice(INNER_AUTHORITY.lastIndexOf(':') + 1))
 const PASSWORD = process.env.DSHGW_PASSWORD ?? ''
 const SESSION_HOURS = Number(process.env.DSHGW_SESSION_HOURS ?? '12')
-const NGROK_API = process.env.DSHGW_NGROK_API ?? 'http://127.0.0.1:4040'
+// Which tunnel agent is in front, and the local API (if any) that can be asked
+// for the public URL. Discovery itself is a dispatch keyed by this name, so an
+// unsupported value is reported rather than silently leaving the session with
+// no link.
+const TUNNEL = process.env.DSHGW_TUNNEL ?? 'ngrok'
+const TUNNEL_API = process.env.DSHGW_TUNNEL_API ?? 'http://127.0.0.1:4040'
 const PUBLIC_URL_OVERRIDE = process.env.DSHGW_PUBLIC_URL ?? ''
 const URL_FILE = process.env.DSHGW_URL_FILE ?? ''
 
@@ -624,47 +629,62 @@ logReader.on('line', (line) => {
 // ── public URL discovery ────────────────────────────────────────────────────
 
 /**
+ * Ask ngrok's inspection API for the tunnel's public URL.
+ *
+ * The agent defaults to port 4040 but steps to the next free port when that one
+ * is taken, so the configured base is a starting point rather than the answer.
+ * Returns '' while the agent is not up yet.
+ */
+async function discoverNgrokUrl() {
+  const base = Number(new URL(TUNNEL_API).port || '4040')
+  const candidates = Array.from({ length: 5 }, (_, index) => `http://127.0.0.1:${String(base + index)}`)
+  for (const candidate of candidates) {
+    try {
+      const response = await fetch(`${candidate}/api/tunnels`, { signal: AbortSignal.timeout(2000) })
+      if (!response.ok) continue
+      const body = await response.json()
+      // Prefer an https endpoint: the login cookie is marked Secure when the
+      // request arrives over TLS, and a mixed scheme would break it.
+      const tunnels = body.tunnels ?? []
+      const tunnel = tunnels.find((entry) => typeof entry.public_url === 'string'
+        && entry.public_url.startsWith('https://'))
+        ?? tunnels.find((entry) => typeof entry.public_url === 'string')
+      if (tunnel !== undefined) {
+        log(`public URL: ${tunnel.public_url} (ngrok API on port ${new URL(candidate).port})`)
+        return tunnel.public_url.replace(/\/+$/u, '')
+      }
+    } catch {
+      // The agent is not up yet — keep waiting.
+    }
+  }
+  return ''
+}
+
+/**
  * Resolve the public origin and record it. Explicit configuration wins; then
- * the ngrok agent's local API; then nothing (the caller prints a loopback URL
- * and says the tunnel is missing).
+ * the running agent's local API, which is the only way to learn the URL of a
+ * quick tunnel — the hostname is minted by Cloudflare at connect time and
+ * appears nowhere else; then nothing, and the caller prints a loopback URL and
+ * says the tunnel is missing.
  */
 async function publishUrl() {
   if (PUBLIC_URL_OVERRIDE !== '') {
     publicUrl = PUBLIC_URL_OVERRIDE.replace(/\/+$/u, '')
   } else {
-    // The agent's inspection API defaults to 4040 but steps to the next free
-    // port when that one is taken, so the configured base is a starting point
-    // rather than the whole answer.
-    const base = Number(new URL(NGROK_API).port || '4040')
-    const candidates = Array.from({ length: 5 }, (_, index) => `http://127.0.0.1:${String(base + index)}`)
+    const discover = { ngrok: discoverNgrokUrl }[TUNNEL]
+    if (discover === undefined) {
+      log(`no URL discovery for a '${TUNNEL}' tunnel; set DSHGW_PUBLIC_URL`)
+      return
+    }
     // Bringing a tunnel up can take a while, so wait well past the point where
     // the rest of the session is already serving.
     for (let attempt = 0; attempt < 180 && publicUrl === ''; attempt += 1) {
-      for (const candidate of candidates) {
-        try {
-          const response = await fetch(`${candidate}/api/tunnels`, { signal: AbortSignal.timeout(2000) })
-          if (!response.ok) continue
-          const body = await response.json()
-          // Prefer an https endpoint: the login cookie is marked Secure when
-          // the request arrives over TLS, and a mixed scheme would break it.
-          const tunnels = body.tunnels ?? []
-          const tunnel = tunnels.find((entry) => typeof entry.public_url === 'string'
-            && entry.public_url.startsWith('https://'))
-            ?? tunnels.find((entry) => typeof entry.public_url === 'string')
-          if (tunnel !== undefined) {
-            publicUrl = tunnel.public_url.replace(/\/+$/u, '')
-            log(`public URL: ${publicUrl} (ngrok API on port ${new URL(candidate).port})`)
-            break
-          }
-        } catch {
-          // The agent is not up yet — keep waiting.
-        }
-      }
+      publicUrl = await discover()
       if (publicUrl === '') await new Promise((resolve) => setTimeout(resolve, 1000))
     }
   }
   if (publicUrl === '') {
-    log('no public URL: set DSHGW_PUBLIC_URL or start the ngrok agent')
+    log(`no public URL: set DSHGW_PUBLIC_URL, or check the ${TUNNEL} agent`)
     return
   }
   log(`public URL: ${publicUrl}`)
