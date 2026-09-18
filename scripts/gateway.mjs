@@ -52,6 +52,14 @@ const PASSWORD = process.env.DSHGW_PASSWORD ?? ''
  * than to "unlimited": the permissive reading of a typo is a cookie that never
  * expires, which is the one outcome a mistake must not produce. `Number('soon')`
  * is `NaN`, and `NaN >= 0` is false, so the guard below catches it.
+ *
+ * The default differs from action.sh's `DSH_SESSION_HOURS=0` on purpose. That
+ * script always passes this variable explicitly, so the default here applies
+ * only when the gateway is started on its own — by the end-to-end test, or by
+ * hand. In that case nothing has told the gateway how long the session is, and
+ * a bounded cookie is the safer answer for the process that holds the signing
+ * key; 12 hours is long enough to outlive any real session and short enough not
+ * to be permanent.
  */
 const SESSION_HOURS_PARSED = Number(process.env.DSHGW_SESSION_HOURS ?? '12')
 const SESSION_HOURS = Number.isFinite(SESSION_HOURS_PARSED) && SESSION_HOURS_PARSED >= 0
